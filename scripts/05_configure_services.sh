@@ -144,6 +144,45 @@ N8N_WORKER_COUNT="${N8N_WORKER_COUNT:-1}"
 # Persist N8N_WORKER_COUNT to .env
 write_env_var "N8N_WORKER_COUNT" "$N8N_WORKER_COUNT"
 
+# Resource Allocation Section
+echo
+log_info "====== Hardware Resource Allocation (Optional) ======"
+echo
+echo "Would you like to configure resource limits for containers?"
+echo "This helps prevent services from consuming all system resources."
+echo "We will calculate weighted values based on your VPS size,"
+echo "ensuring that 15% is reserved for the host system"
+read -p "Configure resource limits? (y/N): " configure_resources
+
+if [[ "$configure_resources" =~ ^[Yy]$ ]]; then
+    # Get hardware specs
+    read -p "How many CPU cores does your system have? (e.g., 4): " TOTAL_CORES
+    read -p "How much RAM (in GB) does your system have? (e.g., 16): " TOTAL_RAM_GB
+    
+    # Validate inputs
+    if ! [[ "$TOTAL_CORES" =~ ^[0-9]+$ ]] || ! [[ "$TOTAL_RAM_GB" =~ ^[0-9]+$ ]]; then
+        log_error "Invalid input. Skipping resource configuration."
+    else
+        # Calculate available resources (leaving 15% for host)
+        AVAILABLE_CORES=$(echo "$TOTAL_CORES * 0.85" | bc -l | xargs printf "%.1f")
+        AVAILABLE_RAM_GB=$(echo "$TOTAL_RAM_GB * 0.85" | bc -l | xargs printf "%.0f")
+        
+        log_info "Allocating $AVAILABLE_CORES cores and ${AVAILABLE_RAM_GB}GB RAM to containers..."
+        
+        # Generate resource allocation script
+        python3 scripts/generate_resource_limits.py \
+            --cores "$AVAILABLE_CORES" \
+            --ram "$AVAILABLE_RAM_GB" \
+            --profiles "$COMPOSE_PROFILES" \
+            --output docker-compose.override.yml
+        
+        if [ $? -eq 0 ]; then
+            log_success "Resource limits configured in docker-compose.override.yml"
+        else
+            log_warning "Failed to generate resource limits. Continuing without them."
+        fi
+    fi
+fi
 
 # ----------------------------------------------------------------
 # Cloudflare Tunnel Token (if cloudflare-tunnel profile is active)
