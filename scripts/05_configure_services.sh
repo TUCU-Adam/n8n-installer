@@ -148,10 +148,10 @@ write_env_var "N8N_WORKER_COUNT" "$N8N_WORKER_COUNT"
 echo
 log_info "====== Hardware Resource Allocation (Optional) ======"
 echo
-echo "Would you like to configure resource limits for containers?"
+echo "Would you like to (re)configure resource limits for containers?"
 echo "This helps prevent services from consuming all system resources."
-echo "We will calculate weighted values based on your VPS size,"
-echo "ensuring that 15% is reserved for the host system"
+echo "We will (re)calculate weighted values based on your VPS size and your"
+echo "selected containers, ensuring that 15% is reserved for the host system"
 read -p "Configure resource limits? (y/N): " configure_resources
 
 if [[ "$configure_resources" =~ ^[Yy]$ ]]; then
