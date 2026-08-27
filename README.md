@@ -60,6 +60,8 @@ The installer also makes the following powerful open-source tools **available fo
 
 ✅ [**n8n**](https://n8n.io/) - A low-code platform with over 400 integrations and advanced AI components to automate workflows.
 
+✅ [**n8n-MCP**](https://github.com/czlonkowski/n8n-mcp) - A Model Context Protocol server that gives AI coding assistants (Claude Code, Cursor, Windsurf, VS Code Copilot) indexed access to every n8n node's documentation, property schemas and thousands of workflow templates - and, once you add an n8n API key, the ability to create and update workflows in your n8n instance straight from your IDE.
+
 ✅ [**ComfyUI**](https://github.com/comfyanonymous/ComfyUI) - A powerful, node-based UI for Stable Diffusion workflows. Build and run image-generation pipelines visually, with support for custom nodes and extensions.
 
 ✅ [**Crawl4ai**](https://github.com/unclecode/crawl4ai) - A flexible web crawler designed for AI, enabling you to extract data from websites for your projects.
@@ -185,6 +187,7 @@ After successful installation, your services are up and running! Here's how to g
     The installation script provided a summary report with all access URLs and credentials. Please refer to that report. The main services will be available at the following addresses (replace `yourdomain.com` with your actual domain):
 
     - **n8n:** `n8n.yourdomain.com` (Log in with the email address you provided during installation and the initial password from the summary report. You may be prompted to change this password on first login.)
+    - **n8n-MCP:** `n8n-mcp.yourdomain.com` (MCP endpoint at `/mcp`. Every request must send `Authorization: Bearer <N8N_MCP_AUTH_TOKEN>` - the token is on the Welcome Page - so a browser visit returns 401 by design. Connect with `npx -y mcp-remote https://n8n-mcp.yourdomain.com/mcp --header "Authorization: Bearer <token>"`. Starts in documentation-only mode; to also manage workflows, create an API key in n8n under Settings -> n8n API, set `N8N_API_KEY` in `.env` and run `make restart`. Note that outside n8n Enterprise an API key has full account access.)
     - **Appsmith:** `appsmith.yourdomain.com` (Low-code app builder)
     - **ComfyUI:** `comfyui.yourdomain.com` (Node-based Stable Diffusion UI)
     - **Databasus:** `databasus.yourdomain.com`

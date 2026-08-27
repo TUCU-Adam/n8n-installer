@@ -20,6 +20,27 @@ import /etc/caddy/addons/tls-snippet.conf
     reverse_proxy n8n:5678
 }
 
+# n8n-MCP (MCP server for n8n — Bearer token protected)
+# Gated on the same token n8n-MCP itself validates, so a single
+# 'Authorization: Bearer <N8N_MCP_AUTH_TOKEN>' header satisfies both layers.
+# basic_auth is deliberately NOT used here: HTTP carries one Authorization
+# header, and MCP clients (mcp-remote) send only a Bearer token, so basic auth
+# would make the endpoint unusable for every client.
+# No flush_interval needed — Caddy flushes immediately for
+# 'Content-Type: text/event-stream' and when Content-Length is unknown, which
+# covers n8n-MCP's streamable-HTTP responses.
+{$N8N_MCP_HOSTNAME} {
+    import service_tls
+
+    @authorized header Authorization "Bearer {$N8N_MCP_AUTH_TOKEN}"
+
+    handle @authorized {
+        reverse_proxy n8n-mcp:3000
+    }
+
+    respond 401
+}
+
 # Open WebUI
 {$WEBUI_HOSTNAME} {
     import service_tls

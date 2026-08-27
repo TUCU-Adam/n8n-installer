@@ -164,6 +164,14 @@
             category: 'automation',
             docsUrl: 'https://docs.n8n.io'
         },
+        'n8n-mcp': {
+            name: 'n8n-MCP',
+            description: 'MCP Server for n8n',
+            icon: 'MC',
+            color: 'bg-[#EA4B71]',
+            category: 'automation',
+            docsUrl: 'https://github.com/czlonkowski/n8n-mcp'
+        },
         'flowise': {
             name: 'Flowise',
             description: 'AI Agent Builder',
@@ -633,6 +641,7 @@
         dashboard: { label: 'Dashboard', isLink: true },
         docs: { label: 'Docs', isLink: true },
         api_endpoint: { label: 'API', isLink: true },
+        mcp_endpoint: { label: 'MCP Endpoint', isSecret: false },
         admin: { label: 'Admin', isLink: true },
         ui: { label: 'UI', isLink: true },
         service_role_key: { label: 'Service Key', isSecret: true },

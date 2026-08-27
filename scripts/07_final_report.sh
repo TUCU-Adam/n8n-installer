@@ -85,6 +85,13 @@ fi
 if is_profile_active "n8n"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}n8n${NC}: Complete first-run setup with your email"
 fi
+if is_profile_active "n8n-mcp"; then
+    echo -e "     ${GREEN}*${NC} ${WHITE}n8n-MCP${NC}: running in documentation-only mode"
+    echo -e "       To enable workflow management: in n8n open Settings > n8n API,"
+    echo -e "       create an API key, set N8N_API_KEY in .env, then run 'make restart'"
+    echo -e "       Connect your IDE (token is on the Welcome Page):"
+    echo -e "       ${CYAN}npx -y mcp-remote https://${N8N_MCP_HOSTNAME:-<N8N_MCP_HOSTNAME>}/mcp --header \"Authorization: Bearer <N8N_MCP_AUTH_TOKEN>\"${NC}"
+fi
 if is_profile_active "portainer"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Portainer${NC}: Create admin account on first login"
 fi

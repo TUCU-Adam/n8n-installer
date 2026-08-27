@@ -102,6 +102,7 @@ declare -A VARS_TO_GENERATE=(
     ["LT_PASSWORD"]="password:32" # Added LibreTranslate basic auth password
     ["MINIO_ROOT_PASSWORD"]="password:32"
     ["N8N_ENCRYPTION_KEY"]="secret:64" # base64 encoded, 48 bytes -> 64 chars
+    ["N8N_MCP_AUTH_TOKEN"]="secret:48" # Bearer token for n8n-MCP (Caddy gate + service auth)
     ["N8N_RUNNERS_AUTH_TOKEN"]="secret:64" # Task runner auth token for n8n v2.0
     ["N8N_USER_MANAGEMENT_JWT_SECRET"]="secret:64" # base64 encoded, 48 bytes -> 64 chars
     ["NEO4J_AUTH_PASSWORD"]="password:32" # Added Neo4j password

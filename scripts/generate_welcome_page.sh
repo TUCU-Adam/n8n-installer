@@ -396,6 +396,22 @@ if is_profile_active "waha"; then
     }")
 fi
 
+# n8n-MCP (Bearer token protected, same token at Caddy and in the service)
+if is_profile_active "n8n-mcp"; then
+    SERVICES_ARRAY+=("    \"n8n-mcp\": {
+      \"hostname\": \"$(json_escape "$N8N_MCP_HOSTNAME")\",
+      \"credentials\": {
+        \"api_token\": \"$(json_escape "$N8N_MCP_AUTH_TOKEN")\"
+      },
+      \"extra\": {
+        \"mcp_endpoint\": \"https://$(json_escape "$N8N_MCP_HOSTNAME")/mcp\",
+        \"internal_api\": \"http://n8n-mcp:3000\",
+        \"recommendation\": \"Requests must send header: Authorization: Bearer <API Token>. Workflow-management tools require N8N_API_KEY in .env (n8n UI -> Settings -> n8n API), then 'make restart'.\",
+        \"docs\": \"https://github.com/czlonkowski/n8n-mcp\"
+      }
+    }")
+fi
+
 # Crawl4AI (internal only)
 if is_profile_active "crawl4ai"; then
     SERVICES_ARRAY+=("    \"crawl4ai\": {
@@ -544,6 +560,16 @@ if is_profile_active "n8n"; then
       \"step\": $STEP_NUM,
       \"title\": \"Create your first workflow\",
       \"description\": \"Start with Manual Trigger + HTTP Request nodes\"
+    }")
+    ((STEP_NUM++))
+fi
+
+# n8n-MCP starts in documentation-only mode; the API key is a manual step
+if is_profile_active "n8n-mcp"; then
+    QUICK_START_ARRAY+=("    {
+      \"step\": $STEP_NUM,
+      \"title\": \"Unlock n8n-MCP workflow tools\",
+      \"description\": \"Create an API key in n8n (Settings > n8n API), set N8N_API_KEY in .env, then run 'make restart'\"
     }")
     ((STEP_NUM++))
 fi
