@@ -46,6 +46,21 @@ def get_gpu_devices_compose_files():
                   f"(requires the {profile} profile and {compose_file}).")
     return files
 
+def get_open_webui_postgres_compose_files():
+    """Return the Open WebUI PostgreSQL override when OPEN_WEBUI_DATABASE=postgres.
+
+    Without it Open WebUI keeps its SQLite database in the open-webui volume,
+    which is what existing installations stay on (issue #105).
+    """
+    env_values = dotenv_values(".env")
+    profiles = (env_values.get("COMPOSE_PROFILES") or "").split(',')
+    compose_file = "docker-compose.open-webui-postgres.yml"
+    if (env_values.get("OPEN_WEBUI_DATABASE") == "postgres"
+            and "open-webui" in profiles
+            and os.path.exists(compose_file)):
+        return [compose_file]
+    return []
+
 def get_all_profiles(compose_file):
     """Get all profile names from a docker-compose file."""
     if not os.path.exists(compose_file):
@@ -433,6 +448,10 @@ def start_local_ai():
     # Include GPU pinning overrides when *_GPU_DEVICES is set in .env
     for gpu_devices_compose_path in get_gpu_devices_compose_files():
         compose_files.extend(["-f", gpu_devices_compose_path])
+
+    # Include the Open WebUI PostgreSQL override when OPEN_WEBUI_DATABASE=postgres
+    for open_webui_compose_path in get_open_webui_postgres_compose_files():
+        compose_files.extend(["-f", open_webui_compose_path])
 
     # Include user overrides if present (must be last for highest precedence)
     override_path = "docker-compose.override.yml"

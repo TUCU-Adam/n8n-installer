@@ -354,6 +354,19 @@ get_invokeai_gpu_devices_compose() {
     return 1
 }
 
+# Get the Open WebUI PostgreSQL override path if the open-webui profile is
+# active and OPEN_WEBUI_DATABASE is "postgres" (requires load_env first).
+# Without it, Open WebUI keeps its SQLite database in the open-webui volume.
+# Usage: path=$(get_open_webui_postgres_compose) && COMPOSE_FILES+=("-f" "$path")
+get_open_webui_postgres_compose() {
+    local compose_file="$PROJECT_ROOT/docker-compose.open-webui-postgres.yml"
+    if [ -f "$compose_file" ] && is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-}" = "postgres" ]; then
+        echo "$compose_file"
+        return 0
+    fi
+    return 1
+}
+
 # Get Supabase compose file path if profile is active and file exists
 # Usage: path=$(get_supabase_compose) && COMPOSE_FILES+=("-f" "$path")
 get_supabase_compose() {
@@ -397,6 +410,9 @@ build_compose_files_array() {
         COMPOSE_FILES+=("-f" "$path")
     elif [ -n "${INVOKEAI_GPU_DEVICES:-}" ]; then
         log_warning "INVOKEAI_GPU_DEVICES is set but GPU pinning is NOT applied (requires the invokeai-nvidia profile and docker-compose.invokeai-gpu-devices.yml)"
+    fi
+    if path=$(get_open_webui_postgres_compose); then
+        COMPOSE_FILES+=("-f" "$path")
     fi
     if path=$(get_supabase_compose); then
         COMPOSE_FILES+=("-f" "$path")

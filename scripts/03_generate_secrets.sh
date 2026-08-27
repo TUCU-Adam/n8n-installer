@@ -325,6 +325,21 @@ for var in "${DB_MIGRATION_VARS[@]}"; do
     fi
 done
 
+# Open WebUI storage backend - new installations only (issue #105)
+# New installations: the stack's shared PostgreSQL, which handles concurrent
+#   writes and removes the "database is locked" failures SQLite produces.
+# Upgrades: keep SQLite. Open WebUI does not migrate data between backends, so
+#   flipping this on an existing install would present an empty UI while the
+#   old chats stayed in webui.db inside the open-webui volume. Opting in is a
+#   documented manual step - see the README.
+if [[ -z "${existing_env_vars[OPEN_WEBUI_DATABASE]}" ]]; then
+    if [[ ${#existing_env_vars[@]} -gt 0 ]]; then
+        generated_values["OPEN_WEBUI_DATABASE"]="sqlite"
+    else
+        generated_values["OPEN_WEBUI_DATABASE"]="postgres"
+    fi
+fi
+
 # Create a temporary file for processing
 TMP_ENV_FILE=$(mktemp)
 TEMP_FILES+=("$TMP_ENV_FILE")

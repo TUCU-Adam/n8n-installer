@@ -189,6 +189,27 @@ else
     count_ok "No unhealthy containers"
 fi
 
+# Open WebUI storage backend (issue #105)
+# Two things can silently put a Postgres-configured instance back on SQLite,
+# which looks like total data loss to the user: a missing 'openwebui' database,
+# or a compose invocation that forgot docker-compose.open-webui-postgres.yml.
+# The second check inspects the running container, not just .env.
+if is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-sqlite}" = "postgres" ]; then
+    if docker exec postgres psql -U postgres -tAc \
+        "SELECT 1 FROM pg_database WHERE datname='openwebui'" 2>/dev/null | grep -q 1; then
+        count_ok "Open WebUI database 'openwebui' exists"
+    else
+        count_error "OPEN_WEBUI_DATABASE=postgres but the 'openwebui' database is missing - run 'make update' to create it"
+    fi
+
+    if docker inspect open-webui --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+        | grep -q '^DATABASE_URL=postgresql://'; then
+        count_ok "Open WebUI is running against PostgreSQL"
+    else
+        count_error "OPEN_WEBUI_DATABASE=postgres but the running open-webui container has no PostgreSQL DATABASE_URL - it is on SQLite and will look empty. Run 'make restart'."
+    fi
+fi
+
 # Check DNS resolution
 log_subheader "DNS Resolution"
 

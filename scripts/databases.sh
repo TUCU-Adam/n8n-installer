@@ -29,6 +29,7 @@ INIT_DB_DATABASES=(
     "langfuse"
     "lightrag"
     "nocodb"
+    "openwebui"
     "postiz"
     "temporal"
     "temporal_visibility"
