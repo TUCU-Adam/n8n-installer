@@ -86,9 +86,13 @@ if is_profile_active "n8n"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}n8n${NC}: Complete first-run setup with your email"
 fi
 if is_profile_active "n8n-mcp"; then
-    echo -e "     ${GREEN}*${NC} ${WHITE}n8n-MCP${NC}: running in documentation-only mode"
-    echo -e "       To enable workflow management: in n8n open Settings > n8n API,"
-    echo -e "       create an API key, set N8N_API_KEY in .env, then run 'make restart'"
+    if [ -z "${N8N_API_KEY:-}" ]; then
+        echo -e "     ${GREEN}*${NC} ${WHITE}n8n-MCP${NC}: running in documentation-only mode"
+        echo -e "       To enable workflow management: in n8n open Settings > n8n API,"
+        echo -e "       create an API key, set N8N_API_KEY in .env, then run 'make restart'"
+    else
+        echo -e "     ${GREEN}*${NC} ${WHITE}n8n-MCP${NC}: workflow-management tools enabled (N8N_API_KEY is set)"
+    fi
     echo -e "       Connect your IDE (token is on the Welcome Page):"
     echo -e "       ${CYAN}npx -y mcp-remote https://${N8N_MCP_HOSTNAME:-<N8N_MCP_HOSTNAME>}/mcp --header \"Authorization: Bearer <N8N_MCP_AUTH_TOKEN>\"${NC}"
 fi
@@ -107,6 +111,17 @@ if is_profile_active "open-webui"; then
         echo -e "       ${WHITE}Storage${NC}: SQLite. PostgreSQL avoids 'database is locked' errors with"
         echo -e "       several tabs/devices - see 'Open WebUI: SQLite or PostgreSQL' in the README"
         echo -e "       (switching requires manual data migration)."
+    else
+        echo -e "       ${WHITE}Storage${NC}: PostgreSQL (database 'openwebui')"
+        # State the backend explicitly and verify it: Open WebUI answers /health
+        # even when its database is unreachable, so a failed CREATE DATABASE
+        # would otherwise leave a healthy-looking container that 500s on every
+        # request, with nothing in this report to say so.
+        if ! docker exec postgres psql -U postgres -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='openwebui'" 2>/dev/null | grep -q 1; then
+            echo -e "       ${RED}WARNING${NC}: the 'openwebui' database does not exist. Open WebUI will"
+            echo -e "       start but fail on every request. Re-run 'make update', then 'make doctor'."
+        fi
     fi
 fi
 if is_profile_active "nocodb"; then

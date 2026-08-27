@@ -565,8 +565,9 @@ if is_profile_active "n8n"; then
     ((STEP_NUM++))
 fi
 
-# n8n-MCP starts in documentation-only mode; the API key is a manual step
-if is_profile_active "n8n-mcp"; then
+# n8n-MCP starts in documentation-only mode; the API key is a manual step.
+# Skip the step once a key is set - it is then already done.
+if is_profile_active "n8n-mcp" && [ -z "${N8N_API_KEY:-}" ]; then
     QUICK_START_ARRAY+=("    {
       \"step\": $STEP_NUM,
       \"title\": \"Unlock n8n-MCP workflow tools\",

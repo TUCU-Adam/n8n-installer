@@ -62,7 +62,7 @@ This is **Selfhost AI** (repository `selfhost-ai`, formerly `n8n-install`), a Do
 7. `07_final_report.sh` - Display credentials and URLs
 8. `08_fix_permissions.sh` - Fix file ownership for non-root access
 
-The update flow (`scripts/update.sh`) similarly orchestrates: git fetch + reset → service selection → `apply_update.sh` → restart. During updates, `03_generate_secrets.sh --update` adds new variables from `.env.example` without regenerating existing ones (preserves user-set values).
+The update flow (`scripts/update.sh`) similarly orchestrates: git fetch + reset → service selection → `apply_update.sh` → restart. During updates, `03_generate_secrets.sh` adds new variables from `.env.example` without regenerating existing ones (preserves user-set values). Note the `--update` flag `apply_update.sh` passes is **not parsed** - the behavior is unconditional, and code that needs to tell a fresh install from an upgrade tests `${#existing_env_vars[@]} -gt 0` instead (see the `DB_MIGRATION_VARS` and `OPEN_WEBUI_DATABASE` blocks).
 
 **Git update modes**: Default is `reset` (hard reset to origin). Set `GIT_MODE=merge` in `.env` for fork workflows (merges from upstream instead of hard reset). The `make git-pull` command uses merge mode. Git branch support is explicit: `GIT_SUPPORTED_BRANCHES=("main" "develop")` in `git.sh`; unknown branches warn and fall back to `main`.
 
@@ -177,7 +177,7 @@ This project uses [Semantic Versioning](https://semver.org/). When updating `CHA
 - `OLLAMA_INSTANCE_COUNT` in `.env` (default 1, max 8) drives `scripts/generate_ollama_instances.sh`, which writes `docker-compose.ollama-instances.yml` (auto-generated, gitignored)
 - **Template profile pattern**, same as the n8n workers: `docker-compose.yml` defines `ollama-instance-template` and `ollama-instance-template-amd` with `profiles: ["ollama-template"]` (never activated directly)
 - **The templates deliberately carry no `deploy:` block.** Compose *appends* `deploy.resources.reservations.devices` across `extends`, so a count-based reservation on the template would leak an extra, arbitrary GPU into every instance that pins specific device IDs. Do not add one.
-- Instance 1 is the stock `ollama` container and is never modified; count 1 generates nothing and **removes** a stale file (an overlay with an empty `services:` key is a fatal Compose error)
+- Instance 1 is the stock `ollama` container and is never modified; count 1 generates nothing and **removes** a stale file, which otherwise resurrects the old instance set after a downscale
 - Per-instance tuning uses `OLLAMA<N>_*` variables emitted as nested defaults (`${OLLAMA2_KEEP_ALIVE:-${OLLAMA_KEEP_ALIVE:-}}`), so users tune `.env` and restart without regenerating
 - NVIDIA pins via `deploy.…device_ids`; AMD pins via `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES` (ROCm passes all devices through)
 - All instances share the `ollama_storage` volume, so models are downloaded once; only instance 1 has a model-pull job
@@ -210,7 +210,7 @@ The `scripts/03_generate_secrets.sh` script:
 - Creates bcrypt password hashes using Caddy's `hash-password` command
 - Preserves existing user-provided values in `.env`
 - Supports different secret types via `VARS_TO_GENERATE` map: `password:32`, `jwt`, `api_key`, `base64:64`, `hex:32`
-- When called with `--update` flag (during updates), only adds new variables without regenerating existing ones
+- Preserves existing values on every run; the `--update` flag passed during updates is accepted but never parsed
 
 ### Utility Functions (scripts/utils.sh)
 
@@ -253,7 +253,7 @@ Common profiles:
 - `dify`: Dify AI platform (external compose, cloned at runtime; mutually exclusive with `supabase`)
 - `gost`: HTTP/HTTPS proxy for routing AI service outbound traffic
 - `python-runner`: Internal Python execution environment (no external access)
-- `searxng`, `letta`, `lightrag`, `libretranslate`, `crawl4ai`, `docling`, `waha`, `comfyui`, `paddleocr`, `ragapp`, `gotenberg`, `postiz`: Additional optional services
+- `searxng`, `letta`, `lightrag`, `libretranslate`, `crawl4ai`, `docling`, `waha`, `comfyui`, `paddleocr`, `ragapp`, `gotenberg`, `postiz`, `n8n-mcp`: Additional optional services
 
 ## Architecture Patterns
 

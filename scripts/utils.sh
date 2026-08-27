@@ -429,6 +429,8 @@ build_compose_files_array() {
     fi
     if path=$(get_open_webui_postgres_compose); then
         COMPOSE_FILES+=("-f" "$path")
+    elif is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-}" = "postgres" ]; then
+        log_error "OPEN_WEBUI_DATABASE=postgres but docker-compose.open-webui-postgres.yml is missing - Open WebUI will start on SQLite and appear EMPTY. Restore the file or set OPEN_WEBUI_DATABASE=sqlite in .env."
     fi
     if path=$(get_supabase_compose); then
         COMPOSE_FILES+=("-f" "$path")
@@ -775,16 +777,32 @@ cleanup_stale_ollama_instances() {
     local max="${2:-8}"
     local i container_name
     local removed=0
+    local failed=0
 
     command -v docker >/dev/null 2>&1 || return 0
+
+    # Distinguish "nothing to clean" from "could not look". Without this a
+    # flaking daemon silently leaves every stale instance running.
+    if ! docker info >/dev/null 2>&1; then
+        log_warning "Docker is not reachable - skipped the check for stale Ollama instance containers. Re-run 'bash scripts/generate_ollama_instances.sh' once Docker is up."
+        return 0
+    fi
 
     for (( i = keep + 1; i <= max; i++ )); do
         container_name="ollama${i}"
         if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
             log_info "Removing stale Ollama instance container: $container_name"
             docker stop "$container_name" >/dev/null 2>&1 || true
-            docker rm -f "$container_name" >/dev/null 2>&1 || true
-            removed=$((removed + 1))
+            # Branch on the real result: 'removed' must count containers that
+            # are actually gone, not ones we merely tried to remove. A silent
+            # failure here leaves an orphan holding a GPU - exactly what this
+            # function exists to prevent.
+            if docker rm -f "$container_name" >/dev/null 2>&1; then
+                removed=$((removed + 1))
+            else
+                log_error "Failed to remove stale Ollama container '$container_name'. It may still be running and holding a GPU. Remove it manually: docker rm -f $container_name"
+                failed=$((failed + 1))
+            fi
         fi
     done
 
@@ -792,6 +810,9 @@ cleanup_stale_ollama_instances() {
     # and a failing &&-list as the final statement would abort it.
     if [ "$removed" -gt 0 ]; then
         log_success "Removed $removed stale Ollama instance container(s)"
+    fi
+    if [ "$failed" -gt 0 ]; then
+        log_warning "$failed stale Ollama instance container(s) could not be removed - see the errors above"
     fi
     return 0
 }
@@ -881,13 +902,38 @@ harden_supabase_gateway_bind() {
 
     local sb_env="$PROJECT_ROOT/supabase/docker/.env"
     local default_bind="127.0.0.1:8000"
-    local bind legacy
+    local bind legacy legacy_kong gw_port
 
     # Seed the root .env when the key has never existed. This also covers the
     # 'git pull' + 'make restart' path, which never runs 03_generate_secrets.sh.
     bind=$(read_env_var "API_GW_HTTP_PORT")
     if [ -z "$bind" ]; then
-        write_env_var "API_GW_HTTP_PORT" "$default_bind"
+        # Upstream precedence is API_GW_HTTP_PORT -> KONG_HTTP_PORT -> 8000, so
+        # seeding API_GW_HTTP_PORT overrides whatever the legacy key says. Carry
+        # the user's own choice across instead of silently moving their gateway.
+        legacy_kong=$(read_env_var "KONG_HTTP_PORT")
+        if [[ "$legacy_kong" == *:* ]]; then
+            # Already an explicit address (e.g. 0.0.0.0:8000 or a LAN IP) - that
+            # is a deliberate choice, so leave the gateway exactly as configured.
+            log_info "KONG_HTTP_PORT is set to '$legacy_kong'; leaving the Supabase API gateway binding as configured."
+            return 0
+        fi
+        gw_port="8000"
+        if [[ "$legacy_kong" =~ ^[0-9]+$ ]]; then
+            gw_port="$legacy_kong"
+        fi
+        default_bind="127.0.0.1:${gw_port}"
+
+        # Check the write: .env is often root-owned (see 08_fix_permissions.sh),
+        # and an unchecked failure under the caller's 'set -e' would abort
+        # 'make restart' with a bare "Permission denied" from deep inside utils.sh.
+        if ! write_env_var "API_GW_HTTP_PORT" "$default_bind"; then
+            log_error "Could not write API_GW_HTTP_PORT to $ENV_FILE (permission denied?). The Supabase API gateway will stay bound to all interfaces (issue #108). Fix ownership of .env, or set API_GW_HTTP_PORT=${default_bind} manually, then re-run."
+            # Return success on purpose: an unwritable .env is a pre-existing
+            # condition and must not stop the user restarting their stack. The
+            # error above and the 'make doctor' Exposed Ports check surface it.
+            return 0
+        fi
         bind="$default_bind"
         log_warning "Supabase API gateway is now bound to ${default_bind} instead of all interfaces (issue #108). To expose it again, set API_GW_HTTP_PORT in .env (e.g. API_GW_HTTP_PORT=8000)."
     fi
@@ -905,8 +951,14 @@ harden_supabase_gateway_bind() {
     # Force-sync into the file Compose actually reads for the Supabase project
     if [ -f "$sb_env" ]; then
         if [ "$(read_env_var "API_GW_HTTP_PORT" "$sb_env")" != "$bind" ]; then
-            write_env_var "API_GW_HTTP_PORT" "$bind" "$sb_env"
-            log_info "Synced API_GW_HTTP_PORT=${bind} to supabase/docker/.env"
+            # Only claim the sync happened if it actually did - this asserts a
+            # security-relevant fact about where the gateway listens.
+            if write_env_var "API_GW_HTTP_PORT" "$bind" "$sb_env"; then
+                log_info "Synced API_GW_HTTP_PORT=${bind} to supabase/docker/.env"
+            else
+                log_error "Could not write API_GW_HTTP_PORT to $sb_env (permission denied?). The Supabase API gateway will keep its previous binding. Fix ownership of that file and re-run 'make restart'."
+                return 0
+            fi
         fi
         legacy=$(read_env_var "KONG_HTTP_PORT" "$sb_env")
         if [ "$legacy" = "8000" ]; then

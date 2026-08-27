@@ -376,13 +376,13 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      # NocoDB 2026.06.0+ rejects external data sources whose host resolves to a
+      # NocoDB 2026.05.2+ rejects external data sources whose host resolves to a
       # private range (SSRF protection), which covers every hostname on this
       # Docker network - including "postgres". This narrow opt-in re-allows
       # internal databases; webhooks and data import stay protected via
-      # NC_ALLOW_LOCAL_HOOKS / NC_ALLOW_LOCAL_DATA_IMPORT. Must be the quoted
-      # string "true" - NocoDB compares with === 'true', and an unquoted YAML
-      # true would reach the container as "True" and silently fail.
+      # NC_ALLOW_LOCAL_HOOKS / NC_ALLOW_LOCAL_DATA_IMPORT.
+      # NocoDB compares with === 'true', so the value must be exactly lowercase
+      # true; quoted here for consistency with the rest of this file.
       NC_ALLOW_LOCAL_EXTERNAL_DBS: "true"
       NC_AUTH_JWT_SECRET: "${NOCODB_JWT_SECRET}"
       NC_DB: "pg://postgres:5432?u=postgres&p=${POSTGRES_PASSWORD}&d=nocodb"
@@ -442,7 +442,12 @@ services:
       LT_USERNAME: "${LT_USERNAME}"
       N8N_HOSTNAME: "${N8N_HOSTNAME}"
       N8N_MCP_AUTH_TOKEN: "${N8N_MCP_AUTH_TOKEN}"
-      N8N_MCP_HOSTNAME: "${N8N_MCP_HOSTNAME}"
+      # Defaulted, unlike the other hostnames: 'git pull' + 'make restart' does
+      # not add new .env variables, so an .env from before this service existed
+      # would expand to an empty Caddy site address, which is a Caddyfile PARSE
+      # error - Caddy would crash-loop and take HTTPS down for every service,
+      # not just this one. '.localhost' gets an internal cert, so no ACME noise.
+      N8N_MCP_HOSTNAME: "${N8N_MCP_HOSTNAME:-n8n-mcp.localhost}"
       NEO4J_HOSTNAME: "${NEO4J_HOSTNAME}"
       NOCODB_HOSTNAME: "${NOCODB_HOSTNAME}"
       OLLAMA_HOSTNAME: "${OLLAMA_HOSTNAME}"

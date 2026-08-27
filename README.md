@@ -323,11 +323,11 @@ OLLAMA2_KEEP_ALIVE=-1      # keep this instance's model resident forever
 OLLAMA3_MAX_LOADED_MODELS=1
 ```
 
-Any `OLLAMA_*` tuning variable can be set per instance with an `OLLAMA<N>_` prefix; an unset one falls back to the global value. These take effect on the next `make restart` — no regeneration needed.
+The runtime tuning variables — `KEEP_ALIVE`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`, `CONTEXT_LENGTH`, `KV_CACHE_TYPE`, `GPU_OVERHEAD`, `SCHED_SPREAD` — can be set per instance with an `OLLAMA<N>_` prefix, and an unset one falls back to the global value. These take effect on the next `make restart`, with no regeneration needed. (`OLLAMA_GPU_COUNT` has no per-instance form, and `OLLAMA<N>_GPU_DEVICES` does not fall back to the global `OLLAMA_GPU_DEVICES` — it defaults to GPU N-1.)
 
 Notes:
 
-- **Set `OLLAMA_GPU_DEVICES` too.** Extra instances are pinned to explicit GPU IDs, but instance 1 falls back to a count-based reservation and may otherwise land on a GPU already assigned to `ollama2`. `make doctor` warns about this.
+- **On NVIDIA, set `OLLAMA_GPU_DEVICES` too.** Extra instances are pinned to explicit GPU IDs, but instance 1 falls back to a count-based reservation and may otherwise land on a GPU already assigned to `ollama2`. `make doctor` warns about this. On AMD, `OLLAMA_GPU_DEVICES` is ignored: extra instances are pinned with `HIP_VISIBLE_DEVICES`, while instance 1 still sees every GPU — pin it yourself in `docker-compose.override.yml` if that matters.
 - **All instances share one model store**, so each model is downloaded only once.
 - **Extra instances are internal only**, reachable at `http://ollama2:11434` from other containers — for example, add it as a second connection in Open WebUI. There are no published ports; if you need external access to a specific instance, add a `caddy-addon/site-*.conf` file.
 - Lowering the count stops and removes the surplus containers on the next `make update`.
@@ -353,9 +353,9 @@ To switch an existing installation:
      tar czf /backup/open-webui-backup.tar.gz -C /data .
    ```
 2. Set `OPEN_WEBUI_DATABASE=postgres` in `.env`.
-3. Run `make restart`. The `openwebui` database is created automatically by `make install`/`make update`.
-4. Open WebUI comes up **empty** — register a new admin account. Your old data is still in `webui.db` inside the volume.
-5. To move the old data across, use a purpose-built migration tool — [open-webui-postgres-migration](https://github.com/taylorwilsdon/open-webui-postgres-migration) or [Open-WebUI-SQLite-migration](https://github.com/Digitalist-Open-Cloud/Open-WebUI-SQLite-migration). Prefer these over generic `pgloader`, which does not understand Open WebUI's JSON and blob columns.
+3. Run `make update` (not just `make restart`) — the `openwebui` database is created by `make install`/`make update`, and pointing Open WebUI at a database that does not exist gives you a container that starts and then fails every request.
+4. Open WebUI comes up **empty**. If you want your old data, migrate it now, **before registering an account** — importing users into a schema that already has an admin can collide on the primary key or the unique email. Use a purpose-built tool: [open-webui-postgres-migration](https://github.com/taylorwilsdon/open-webui-postgres-migration) or [Open-WebUI-SQLite-migration](https://github.com/Digitalist-Open-Cloud/Open-WebUI-SQLite-migration). Prefer these over generic `pgloader`, which does not understand Open WebUI's JSON and blob columns.
+5. Log in with your migrated account. Only register a fresh admin if you deliberately want to start empty.
 
 To revert, set `OPEN_WEBUI_DATABASE=sqlite` and run `make restart` — the original SQLite file is left untouched.
 
@@ -370,14 +370,16 @@ The installer configures `ufw` with `default deny incoming`, but **that does not
 By design this stack publishes almost nothing: every service is reached through Caddy on ports 80/443 only. To audit what is actually exposed on your server:
 
 ```bash
-docker ps --format '{{.Names}}\t{{.Ports}}'
-ss -ltnp                  # what is really listening, and on which address
+docker ps --format '{{.Names}}\t{{.Ports}}'   # the reliable check
+ss -ltnp                                      # host listeners
 ```
+
+Trust `docker ps` here: with `"userland-proxy": false` a published port is DNAT'd with no host listener at all, so `ss` shows nothing while the port is still reachable.
 
 Anything showing `0.0.0.0:<port>->` is internet-reachable if your server has a public IP.
 
 - **Supabase API gateway** — bound to `127.0.0.1:8000` by default. Caddy still reaches it over the Docker network, and host-local tooling (`curl http://localhost:8000`) keeps working. To expose it deliberately, set `API_GW_HTTP_PORT` in `.env` (e.g. `API_GW_HTTP_PORT=8000` for all interfaces, or `API_GW_HTTP_PORT=192.168.1.10:8000` for one LAN address) and run `make restart`. `make doctor` warns if the gateway is bound to all interfaces.
-- **Supabase database and pooler** — Supabase's upstream compose still publishes `0.0.0.0:5432` (Postgres) and `0.0.0.0:6543` (the Supavisor pooler). **If you run the `supabase` profile on a public-IP server, restrict these at your cloud provider's firewall or security group**, which is enforced outside the host and therefore not bypassed by Docker. This is upstream behavior that cannot be fixed with a port variable, because `POSTGRES_PORT` is reused as a bare numeric port throughout Supabase's own connection strings.
+- **Supabase database and pooler** — Supabase's upstream compose still publishes `0.0.0.0:5432` and `0.0.0.0:6543` from its `supavisor` service (container `supabase-pooler`). **If you run the `supabase` profile on a public-IP server, restrict these at your cloud provider's firewall or security group**, which is enforced outside the host and therefore not bypassed by Docker. You can close the pooler port yourself with `POOLER_PROXY_PORT_TRANSACTION=127.0.0.1:6543` in `.env`, since that variable is only used for the port mapping. The `5432` mapping cannot be handled the same way: `POSTGRES_PORT` is reused as a bare numeric port throughout Supabase's own connection strings, so it cannot take an address prefix.
 
 ## Cleaning up Docker
 

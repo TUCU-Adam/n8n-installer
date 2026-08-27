@@ -8,6 +8,8 @@
 # Handles compose files via build_compose_files_array() from utils.sh:
 #   - docker-compose.yml (main)
 #   - docker-compose.n8n-workers.yml (if exists and n8n profile active)
+#   - docker-compose.ollama-instances.yml (if exists and an Ollama profile active)
+#   - docker-compose.open-webui-postgres.yml (if OPEN_WEBUI_DATABASE=postgres)
 #   - docker-compose.ollama-gpu-devices.yml (if gpu-nvidia profile active and OLLAMA_GPU_DEVICES set)
 #   - docker-compose.invokeai-gpu-devices.yml (if invokeai-nvidia profile active and INVOKEAI_GPU_DEVICES set)
 #   - supabase/docker/docker-compose.yml (if exists and supabase profile active)
@@ -111,6 +113,8 @@ if path=$(get_invokeai_gpu_devices_compose); then
 fi
 if path=$(get_open_webui_postgres_compose); then
     MAIN_COMPOSE_FILES+=("-f" "$path")
+elif is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-}" = "postgres" ]; then
+    log_error "OPEN_WEBUI_DATABASE=postgres but docker-compose.open-webui-postgres.yml is missing - Open WebUI will start on SQLite and appear EMPTY. Restore the file or set OPEN_WEBUI_DATABASE=sqlite in .env."
 fi
 OVERRIDE_COMPOSE="$PROJECT_ROOT/docker-compose.override.yml"
 if [ -f "$OVERRIDE_COMPOSE" ]; then

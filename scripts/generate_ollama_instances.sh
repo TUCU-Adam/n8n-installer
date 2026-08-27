@@ -5,8 +5,9 @@
 #
 # Instance 1 is the stock "ollama" container defined in docker-compose.yml and
 # is never touched here, so a default install (count 1) behaves exactly as
-# before: the output file is REMOVED rather than written empty, because a
-# Compose overlay with a bare 'services:' key is a fatal parse error.
+# before. The output file is REMOVED rather than written empty: a stale file
+# would resurrect the old instance set after a downscale or point instances at
+# the wrong hardware profile after a switch.
 #
 # This script is idempotent - the file is overwritten on each run.
 
@@ -79,7 +80,9 @@ cat > "$OUTPUT_FILE" << 'EOF'
 #   OLLAMA2_GPU_DEVICES=2
 #   OLLAMA2_KEEP_ALIVE=-1
 #   OLLAMA2_MAX_LOADED_MODELS=1
-# Each falls back to the global OLLAMA_* value, then to the stack default.
+# The runtime knobs fall back to the global OLLAMA_* value, then to the stack
+# default. OLLAMA<N>_GPU_DEVICES is the exception: it defaults to GPU N-1 and
+# does not read the global OLLAMA_GPU_DEVICES.
 
 services:
 EOF

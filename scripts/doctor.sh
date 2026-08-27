@@ -72,6 +72,12 @@ if [ -f "$ENV_FILE" ]; then
         fi
     fi
 
+    # n8n-MCP refuses to start in http mode without AUTH_TOKEN (the entrypoint
+    # exits 1), and Caddy would gate on a bare "Bearer " and 401 everything.
+    if is_profile_active "n8n-mcp" && [ -z "$N8N_MCP_AUTH_TOKEN" ]; then
+        count_error "n8n-mcp profile is active but N8N_MCP_AUTH_TOKEN is empty — the container exits on startup and the endpoint would reject all requests (401). Run 'make update' to generate the token."
+    fi
+
     # Multi-instance Ollama: extra instances are pinned to explicit GPU IDs, but
     # instance 1 falls back to a count-based reservation, so Docker can hand it a
     # GPU already pinned to ollama2 and the two then fight over the same VRAM.
@@ -206,7 +212,12 @@ fi
 # or a compose invocation that forgot docker-compose.open-webui-postgres.yml.
 # The second check inspects the running container, not just .env.
 if is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-sqlite}" = "postgres" ]; then
-    if docker exec postgres psql -U postgres -tAc \
+    # Probe reachability first, otherwise a stopped postgres, an unreachable
+    # daemon or a permissions problem all get reported as "database missing",
+    # sending the user to 'make update', which cannot fix any of them.
+    if ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+        count_error "Cannot reach the postgres container to verify the 'openwebui' database. Check: docker compose -p localai logs postgres"
+    elif docker exec postgres psql -U postgres -tAc \
         "SELECT 1 FROM pg_database WHERE datname='openwebui'" 2>/dev/null | grep -q 1; then
         count_ok "Open WebUI database 'openwebui' exists"
     else
@@ -269,13 +280,19 @@ fi
 # Docker publishes ports in the nat table, BEFORE ufw's INPUT chain, so a
 # 0.0.0.0 bind is reachable from the internet even with 'ufw default deny
 # incoming'. Everything in this stack is meant to be reached through Caddy.
-log_subheader "Exposed Ports"
-
 if is_profile_active "supabase"; then
+    log_subheader "Exposed Ports"
+
+    GW_NAME=$(docker ps --filter 'name=^supabase-envoy$' --filter 'name=^supabase-kong$' \
+                        --format '{{.Names}}' 2>/dev/null)
     GW_PORTS=$(docker ps --filter 'name=^supabase-envoy$' --filter 'name=^supabase-kong$' \
                          --format '{{.Ports}}' 2>/dev/null)
-    if [ -z "$GW_PORTS" ]; then
+    if [ -z "$GW_NAME" ]; then
         count_warning "Supabase API gateway container not found (expected supabase-envoy)"
+    elif [ -z "$GW_PORTS" ]; then
+        # Running with no published ports at all is the most locked-down setup,
+        # not a problem - do not report it as one.
+        count_ok "Supabase API gateway publishes no host ports"
     elif echo "$GW_PORTS" | grep -Eq '(^|, )(0\.0\.0\.0|:::|\[::\]):'; then
         count_warning "Supabase API gateway publishes on all interfaces ($GW_PORTS). Set API_GW_HTTP_PORT=127.0.0.1:8000 in .env and run 'make restart'."
     else
@@ -309,14 +326,29 @@ fi
 
 # Extra Ollama instances. Not via check_service: that helper assumes the
 # container name matches the profile name, which is false for Ollama.
-if [ "${OLLAMA_INSTANCE_COUNT:-1}" -gt 1 ] 2>/dev/null; then
-    for (( i = 2; i <= OLLAMA_INSTANCE_COUNT; i++ )); do
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^ollama${i}$"; then
+# Scans up to the supported maximum, not just the configured count, so that
+# surplus instances are reported too: 'make restart' does not regenerate the
+# compose file, so lowering OLLAMA_INSTANCE_COUNT by hand and restarting leaves
+# the extra containers running and holding GPUs.
+OLLAMA_DOCTOR_COUNT="${OLLAMA_INSTANCE_COUNT:-1}"
+[ "$OLLAMA_DOCTOR_COUNT" -ge 1 ] 2>/dev/null || OLLAMA_DOCTOR_COUNT=1
+# The generator caps at 8 in memory without writing the capped value back, so a
+# hand-edited 99 would otherwise be reported as six missing instances.
+[ "$OLLAMA_DOCTOR_COUNT" -le 8 ] 2>/dev/null || OLLAMA_DOCTOR_COUNT=8
+# Gated on an Ollama profile: a leftover OLLAMA_INSTANCE_COUNT after deselecting
+# Ollama must not produce hard errors for containers that should not exist.
+if is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd" || is_profile_active "cpu"; then
+for (( i = 2; i <= 8; i++ )); do
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^ollama${i}$"; then
+        if [ "$i" -le "$OLLAMA_DOCTOR_COUNT" ]; then
             count_ok "ollama${i} is running"
         else
-            count_error "ollama${i} is not running (OLLAMA_INSTANCE_COUNT=$OLLAMA_INSTANCE_COUNT)"
+            count_warning "ollama${i} is running but OLLAMA_INSTANCE_COUNT=$OLLAMA_DOCTOR_COUNT - it is holding a GPU it should not. Run 'bash scripts/generate_ollama_instances.sh' then 'make restart'."
         fi
-    done
+    elif [ "$i" -le "$OLLAMA_DOCTOR_COUNT" ]; then
+        count_error "ollama${i} is not running (OLLAMA_INSTANCE_COUNT=$OLLAMA_DOCTOR_COUNT)"
+    fi
+done
 fi
 
 if is_profile_active "monitoring"; then
