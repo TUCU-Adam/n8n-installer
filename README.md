@@ -92,7 +92,7 @@ The installer also makes the following powerful open-source tools **available fo
 
 ✅ [**NocoDB**](https://nocodb.com/) - An open source Airtable alternative that turns any database into a smart spreadsheet with a no-code interface for building collaborative apps.
 
-✅ [**Ollama**](https://ollama.com/) - Run Llama 3, Mistral, Gemma, and other large language models locally. Optionally expose its API externally through Caddy under `OLLAMA_HOSTNAME`, protected by a generated Bearer token.
+✅ [**Ollama**](https://ollama.com/) - Run Llama 3, Mistral, Gemma, and other large language models locally. Optionally expose its API externally through Caddy under `OLLAMA_HOSTNAME`, protected by a generated Bearer token. On multi-GPU hosts you can run several instances (`OLLAMA_INSTANCE_COUNT`) to dedicate a GPU per model.
 
 ✅ [**Open WebUI**](https://openwebui.com/) - A user-friendly, ChatGPT-like interface to interact privately with your AI models and n8n agents.
 
@@ -306,6 +306,31 @@ This script will:
 - **Custom Caddy entries** (e.g. reverse proxy for a service running outside this stack): drop a `site-*.conf` file into `caddy-addon/`. It is imported automatically by the main Caddyfile. See [caddy-addon/README.md](caddy-addon/README.md) for examples.
 - **Docker Compose overrides** (change any service property): create a `docker-compose.override.yml` in the project root. It is picked up automatically with the highest precedence.
 - **Settings**: values you set in `.env` are preserved by the updater (except `GOST_NO_PROXY`, which is regenerated so it always covers newly added services).
+
+### Ollama on multi-GPU hosts
+
+By default the stack runs a single Ollama container. On a machine with several GPUs you can run more, so a large model can stay resident on its own GPU instead of being swapped out whenever another model is used.
+
+Set `OLLAMA_INSTANCE_COUNT` in `.env` (1-8) and run `make update` (or `bash scripts/generate_ollama_instances.sh` followed by `make restart`). Instance 1 stays the familiar `ollama` container; extras are `ollama2`, `ollama3`, and so on.
+
+```env
+OLLAMA_INSTANCE_COUNT=3
+OLLAMA_GPU_DEVICES=0,1     # instance 1 -> GPUs 0 and 1
+OLLAMA2_GPU_DEVICES=2      # instance 2 -> GPU 2
+OLLAMA3_GPU_DEVICES=3      # instance 3 -> GPU 3
+
+OLLAMA2_KEEP_ALIVE=-1      # keep this instance's model resident forever
+OLLAMA3_MAX_LOADED_MODELS=1
+```
+
+Any `OLLAMA_*` tuning variable can be set per instance with an `OLLAMA<N>_` prefix; an unset one falls back to the global value. These take effect on the next `make restart` — no regeneration needed.
+
+Notes:
+
+- **Set `OLLAMA_GPU_DEVICES` too.** Extra instances are pinned to explicit GPU IDs, but instance 1 falls back to a count-based reservation and may otherwise land on a GPU already assigned to `ollama2`. `make doctor` warns about this.
+- **All instances share one model store**, so each model is downloaded only once.
+- **Extra instances are internal only**, reachable at `http://ollama2:11434` from other containers — for example, add it as a second connection in Open WebUI. There are no published ports; if you need external access to a specific instance, add a `caddy-addon/site-*.conf` file.
+- Lowering the count stops and removes the surplus containers on the next `make update`.
 
 ### Open WebUI: SQLite or PostgreSQL
 

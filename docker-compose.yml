@@ -707,6 +707,28 @@ services:
       - "/dev/kfd"
       - "/dev/dri"
 
+  # Templates for extra Ollama instances on multi-GPU hosts, used by
+  # docker-compose.ollama-instances.yml via 'extends'. The "ollama-template"
+  # profile is never activated directly.
+  #
+  # These deliberately carry NO 'deploy:' block. Compose APPENDS
+  # deploy.resources.reservations.devices across 'extends', so a count-based
+  # reservation here would leak an extra, arbitrary GPU into every instance
+  # that pins specific device IDs. Do not add one.
+  ollama-instance-template:
+    <<: *service-ollama
+    container_name: ollama-instance-template
+    profiles: ["ollama-template"]
+
+  ollama-instance-template-amd:
+    <<: *service-ollama
+    container_name: ollama-instance-template-amd
+    profiles: ["ollama-template"]
+    image: ollama/ollama:rocm
+    devices:
+      - "/dev/kfd"
+      - "/dev/dri"
+
   ollama-pull-llama-cpu:
     profiles: ["cpu"]
     <<: *init-ollama

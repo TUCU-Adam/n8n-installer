@@ -354,6 +354,19 @@ get_invokeai_gpu_devices_compose() {
     return 1
 }
 
+# Get the extra-Ollama-instances compose file path if it exists and an Ollama
+# hardware profile is active (requires COMPOSE_PROFILES to be set)
+# Usage: path=$(get_ollama_instances_compose) && COMPOSE_FILES+=("-f" "$path")
+get_ollama_instances_compose() {
+    local compose_file="$PROJECT_ROOT/docker-compose.ollama-instances.yml"
+    if [ -f "$compose_file" ] && \
+       { is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd" || is_profile_active "cpu"; }; then
+        echo "$compose_file"
+        return 0
+    fi
+    return 1
+}
+
 # Get the Open WebUI PostgreSQL override path if the open-webui profile is
 # active and OPEN_WEBUI_DATABASE is "postgres" (requires load_env first).
 # Without it, Open WebUI keeps its SQLite database in the open-webui volume.
@@ -399,6 +412,9 @@ build_compose_files_array() {
 
     local path
     if path=$(get_n8n_workers_compose); then
+        COMPOSE_FILES+=("-f" "$path")
+    fi
+    if path=$(get_ollama_instances_compose); then
         COMPOSE_FILES+=("-f" "$path")
     fi
     if path=$(get_ollama_gpu_devices_compose); then
@@ -745,6 +761,39 @@ cleanup_legacy_n8n_workers() {
     else
         log_info "No legacy n8n worker containers found"
     fi
+}
+
+# Remove extra Ollama instance containers above the configured count.
+# 'docker compose down' does NOT remove them: once the generated compose file
+# stops declaring a service, its container is an orphan and survives (no code
+# path passes --remove-orphans), so a downscaled instance would keep running
+# and holding a GPU.
+# Note this claims the ollama2..ollamaN container-name space.
+# Usage: cleanup_stale_ollama_instances <keep_count> <max_instances>
+cleanup_stale_ollama_instances() {
+    local keep="${1:-1}"
+    local max="${2:-8}"
+    local i container_name
+    local removed=0
+
+    command -v docker >/dev/null 2>&1 || return 0
+
+    for (( i = keep + 1; i <= max; i++ )); do
+        container_name="ollama${i}"
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
+            log_info "Removing stale Ollama instance container: $container_name"
+            docker stop "$container_name" >/dev/null 2>&1 || true
+            docker rm -f "$container_name" >/dev/null 2>&1 || true
+            removed=$((removed + 1))
+        fi
+    done
+
+    # Use if/fi, not '[ ... ] && log_success': the generator runs under 'set -e'
+    # and a failing &&-list as the final statement would abort it.
+    if [ "$removed" -gt 0 ]; then
+        log_success "Removed $removed stale Ollama instance container(s)"
+    fi
+    return 0
 }
 
 # Clean up legacy postgresus container after rename to databasus

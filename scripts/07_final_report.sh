@@ -123,6 +123,10 @@ if is_profile_active "gost"; then
 fi
 if is_profile_active "cpu" || is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Ollama API${NC}: To expose externally, point DNS at ${OLLAMA_HOSTNAME:-<OLLAMA_HOSTNAME>} and send 'Authorization: Bearer <token>' (see Welcome Page)"
+    if [ "${OLLAMA_INSTANCE_COUNT:-1}" -gt 1 ] 2>/dev/null; then
+        echo -e "     ${GREEN}*${NC} ${WHITE}Ollama instances${NC}: ${OLLAMA_INSTANCE_COUNT} running (ollama, ollama2, ...), internal only at"
+        echo -e "       http://ollama<N>:11434, sharing one model store. Tune each with OLLAMA<N>_* in .env"
+    fi
 fi
 if is_profile_active "crawl4ai"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Crawl4AI${NC}: Internal API at http://crawl4ai:11235 - requests must send 'Authorization: Bearer <token>' (token on Welcome Page)"

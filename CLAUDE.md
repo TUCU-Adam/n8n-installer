@@ -33,6 +33,7 @@ This is **Selfhost AI** (repository `selfhost-ai`, formerly `n8n-install`), a Do
 - `scripts/07_final_report.sh`: Post-install credential summary
 - `scripts/08_fix_permissions.sh`: Fixes file ownership for non-root access
 - `scripts/generate_n8n_workers.sh`: Generates dynamic worker/runner compose file
+- `scripts/generate_ollama_instances.sh`: Generates extra Ollama instances compose file (multi-GPU)
 - `scripts/update.sh`: Update orchestrator (syncs with origin and updates images)
 - `scripts/update_preview.sh`: Preview available updates without applying (dry-run)
 - `scripts/doctor.sh`: System diagnostics (DNS, SSL, containers, disk, memory)
@@ -171,6 +172,18 @@ This project uses [Semantic Versioning](https://semver.org/). When updating `CHA
 - Workflows can access the host filesystem via `/data/shared` (mapped to `./shared`)
 - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` allows Code nodes to access environment variables
 
+### Ollama Multi-Instance (multi-GPU)
+
+- `OLLAMA_INSTANCE_COUNT` in `.env` (default 1, max 8) drives `scripts/generate_ollama_instances.sh`, which writes `docker-compose.ollama-instances.yml` (auto-generated, gitignored)
+- **Template profile pattern**, same as the n8n workers: `docker-compose.yml` defines `ollama-instance-template` and `ollama-instance-template-amd` with `profiles: ["ollama-template"]` (never activated directly)
+- **The templates deliberately carry no `deploy:` block.** Compose *appends* `deploy.resources.reservations.devices` across `extends`, so a count-based reservation on the template would leak an extra, arbitrary GPU into every instance that pins specific device IDs. Do not add one.
+- Instance 1 is the stock `ollama` container and is never modified; count 1 generates nothing and **removes** a stale file (an overlay with an empty `services:` key is a fatal Compose error)
+- Per-instance tuning uses `OLLAMA<N>_*` variables emitted as nested defaults (`${OLLAMA2_KEEP_ALIVE:-${OLLAMA_KEEP_ALIVE:-}}`), so users tune `.env` and restart without regenerating
+- NVIDIA pins via `deploy.…device_ids`; AMD pins via `HIP_VISIBLE_DEVICES`/`ROCR_VISIBLE_DEVICES` (ROCm passes all devices through)
+- All instances share the `ollama_storage` volume, so models are downloaded once; only instance 1 has a model-pull job
+- No published ports and no Caddy block for extra instances - they are internal (`ollama2:11434`); `caddy-addon/site-*.conf` is the documented extension point
+- The generator is invoked unconditionally from `05_configure_services.sh`, which covers install and `make update`, and self-heals a stale file after a hardware-profile switch
+
 ### Caddy Reverse Proxy
 
 - Automatically obtains Let's Encrypt certificates when `LETSENCRYPT_EMAIL` is set
@@ -221,6 +234,9 @@ Key functions:
 - `backup_preserved_dirs` / `restore_preserved_dirs` - Directory preservation for git updates
 - `cleanup_legacy_n8n_workers` - Remove old n8n worker containers from previous naming convention
 - `get_n8n_workers_compose` / `get_supabase_compose` / `get_dify_compose` - Get compose file path if profile active AND file exists
+- `get_ollama_instances_compose` / `get_open_webui_postgres_compose` - Conditional compose overrides (multi-Ollama, Open WebUI on Postgres)
+- `harden_supabase_gateway_bind` - Keep the Supabase API gateway bound to loopback (issue #108)
+- `cleanup_stale_ollama_instances` - Remove Ollama instance containers above the configured count
 - `build_compose_files_array` - Build global `COMPOSE_FILES` array with all active compose files (main + external)
 
 ### Service Profiles
@@ -380,6 +396,7 @@ bash -n scripts/05_configure_services.sh
 bash -n scripts/07_final_report.sh
 bash -n scripts/generate_welcome_page.sh
 bash -n scripts/generate_n8n_workers.sh
+bash -n scripts/generate_ollama_instances.sh
 bash -n scripts/apply_update.sh
 bash -n scripts/update.sh
 bash -n scripts/install.sh

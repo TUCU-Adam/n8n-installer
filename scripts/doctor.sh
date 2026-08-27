@@ -72,6 +72,17 @@ if [ -f "$ENV_FILE" ]; then
         fi
     fi
 
+    # Multi-instance Ollama: extra instances are pinned to explicit GPU IDs, but
+    # instance 1 falls back to a count-based reservation, so Docker can hand it a
+    # GPU already pinned to ollama2 and the two then fight over the same VRAM.
+    if [ "${OLLAMA_INSTANCE_COUNT:-1}" -gt 1 ] 2>/dev/null && is_profile_active "gpu-nvidia"; then
+        if [ -n "$OLLAMA_GPU_DEVICES" ]; then
+            count_ok "OLLAMA_GPU_DEVICES is set (all $OLLAMA_INSTANCE_COUNT Ollama instances are GPU-pinned)"
+        else
+            count_warning "OLLAMA_INSTANCE_COUNT=$OLLAMA_INSTANCE_COUNT but OLLAMA_GPU_DEVICES is empty — the first Ollama instance is not pinned and may share a GPU with ollama2. Set OLLAMA_GPU_DEVICES in .env (e.g. 0)."
+        fi
+    fi
+
     # Crawl4AI 0.9+ binds loopback only when CRAWL4AI_API_TOKEN is empty, so the
     # container looks "Up" while other containers get connection refused. A
     # healthcheck cannot catch this (localhost works either way), so check here.
@@ -294,6 +305,18 @@ check_service "caddy" "80"
 
 if is_profile_active "n8n"; then
     check_service "n8n" "5678"
+fi
+
+# Extra Ollama instances. Not via check_service: that helper assumes the
+# container name matches the profile name, which is false for Ollama.
+if [ "${OLLAMA_INSTANCE_COUNT:-1}" -gt 1 ] 2>/dev/null; then
+    for (( i = 2; i <= OLLAMA_INSTANCE_COUNT; i++ )); do
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^ollama${i}$"; then
+            count_ok "ollama${i} is running"
+        else
+            count_error "ollama${i} is not running (OLLAMA_INSTANCE_COUNT=$OLLAMA_INSTANCE_COUNT)"
+        fi
+    done
 fi
 
 if is_profile_active "monitoring"; then

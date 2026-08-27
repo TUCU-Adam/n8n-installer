@@ -635,6 +635,7 @@
      */
     const EXTRA_FIELD_LABELS = {
         workers: { label: 'Workers', isSecret: false },
+        instances: { label: 'Instances', isSecret: false },
         mounted_dir: { label: 'Mount', isSecret: false },
         entry_file: { label: 'Entry', isSecret: false },
         logs_command: { label: 'Logs', isSecret: false },
