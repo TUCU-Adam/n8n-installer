@@ -448,7 +448,7 @@ if is_profile_active "cpu" || is_profile_active "gpu-nvidia" || is_profile_activ
         \"api_token\": \"$(json_escape "$OLLAMA_CADDY_API_TOKEN")\"
       },
       \"extra\": {
-        \"instances\": \"${OLLAMA_INSTANCE_COUNT:-1}\",
+        \"instances\": \"$(normalized_ollama_instance_count)\",
         \"internal_api\": \"http://ollama:11434\",
         \"recommendation\": \"External access requires header: Authorization: Bearer <API Token>\"
       }

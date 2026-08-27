@@ -72,8 +72,9 @@ if [ -f "$ENV_FILE" ]; then
         fi
     fi
 
-    # n8n-MCP refuses to start in http mode without AUTH_TOKEN (the entrypoint
-    # exits 1), and Caddy would gate on a bare "Bearer " and 401 everything.
+    # n8n-MCP refuses to start in http mode without AUTH_TOKEN or AUTH_TOKEN_FILE
+    # (the entrypoint exits 1). This stack only ever sets AUTH_TOKEN, and Caddy
+    # would otherwise gate on a bare "Bearer " and 401 everything.
     if is_profile_active "n8n-mcp" && [ -z "$N8N_MCP_AUTH_TOKEN" ]; then
         count_error "n8n-mcp profile is active but N8N_MCP_AUTH_TOKEN is empty — the container exits on startup and the endpoint would reject all requests (401). Run 'make update' to generate the token."
     fi
@@ -224,7 +225,11 @@ if is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-sqlite}" = "postg
         count_error "OPEN_WEBUI_DATABASE=postgres but the 'openwebui' database is missing - run 'make update' to create it"
     fi
 
-    if docker inspect open-webui --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    # Same care as above: a container that was never created makes 'docker
+    # inspect' fail, which must not be reported as "it is on SQLite".
+    if ! docker inspect open-webui >/dev/null 2>&1; then
+        count_warning "The open-webui container does not exist, so its storage backend could not be checked. Start the stack with 'make start'."
+    elif docker inspect open-webui --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
         | grep -q '^DATABASE_URL=postgresql://'; then
         count_ok "Open WebUI is running against PostgreSQL"
     else
@@ -330,15 +335,14 @@ fi
 # surplus instances are reported too: 'make restart' does not regenerate the
 # compose file, so lowering OLLAMA_INSTANCE_COUNT by hand and restarting leaves
 # the extra containers running and holding GPUs.
-OLLAMA_DOCTOR_COUNT="${OLLAMA_INSTANCE_COUNT:-1}"
-[ "$OLLAMA_DOCTOR_COUNT" -ge 1 ] 2>/dev/null || OLLAMA_DOCTOR_COUNT=1
-# The generator caps at 8 in memory without writing the capped value back, so a
-# hand-edited 99 would otherwise be reported as six missing instances.
-[ "$OLLAMA_DOCTOR_COUNT" -le 8 ] 2>/dev/null || OLLAMA_DOCTOR_COUNT=8
+# Clamped so the count quoted in the messages below is the number of instances
+# that actually exist. The generator caps at OLLAMA_MAX_INSTANCES in memory and
+# never writes the capped value back, so .env can still say 99.
+OLLAMA_DOCTOR_COUNT="$(normalized_ollama_instance_count)"
 # Gated on an Ollama profile: a leftover OLLAMA_INSTANCE_COUNT after deselecting
 # Ollama must not produce hard errors for containers that should not exist.
 if is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd" || is_profile_active "cpu"; then
-for (( i = 2; i <= 8; i++ )); do
+for (( i = 2; i <= OLLAMA_MAX_INSTANCES; i++ )); do
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^ollama${i}$"; then
         if [ "$i" -le "$OLLAMA_DOCTOR_COUNT" ]; then
             count_ok "ollama${i} is running"

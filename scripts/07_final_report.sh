@@ -113,11 +113,22 @@ if is_profile_active "open-webui"; then
         echo -e "       (switching requires manual data migration)."
     else
         echo -e "       ${WHITE}Storage${NC}: PostgreSQL (database 'openwebui')"
-        # State the backend explicitly and verify it: Open WebUI answers /health
-        # even when its database is unreachable, so a failed CREATE DATABASE
-        # would otherwise leave a healthy-looking container that 500s on every
-        # request, with nothing in this report to say so.
-        if ! docker exec postgres psql -U postgres -tAc \
+        # Verify that claim against the running stack, not against .env. Two
+        # separate things can be wrong, and each looks fine from the other side:
+        # the compose override can be missing (container silently on SQLite, so
+        # the app just looks empty), or the database can be absent (Open WebUI
+        # answers /health anyway and 500s on every request).
+        if ! docker inspect open-webui >/dev/null 2>&1; then
+            echo -e "       ${RED}WARNING${NC}: the open-webui container does not exist, so the storage"
+            echo -e "       backend could not be verified. Run 'make doctor' once it is up."
+        elif ! docker inspect open-webui --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+            | grep -q '^DATABASE_URL=postgresql://'; then
+            echo -e "       ${RED}WARNING${NC}: the running open-webui container has no PostgreSQL"
+            echo -e "       DATABASE_URL - it is on SQLite and will look EMPTY. Run 'make doctor'."
+        elif ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+            echo -e "       ${RED}WARNING${NC}: PostgreSQL is not reachable, so the 'openwebui' database"
+            echo -e "       could not be verified. Run 'make doctor'."
+        elif ! docker exec postgres psql -U postgres -tAc \
             "SELECT 1 FROM pg_database WHERE datname='openwebui'" 2>/dev/null | grep -q 1; then
             echo -e "       ${RED}WARNING${NC}: the 'openwebui' database does not exist. Open WebUI will"
             echo -e "       start but fail on every request. Re-run 'make update', then 'make doctor'."
@@ -138,8 +149,9 @@ if is_profile_active "gost"; then
 fi
 if is_profile_active "cpu" || is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Ollama API${NC}: To expose externally, point DNS at ${OLLAMA_HOSTNAME:-<OLLAMA_HOSTNAME>} and send 'Authorization: Bearer <token>' (see Welcome Page)"
-    if [ "${OLLAMA_INSTANCE_COUNT:-1}" -gt 1 ] 2>/dev/null; then
-        echo -e "     ${GREEN}*${NC} ${WHITE}Ollama instances${NC}: ${OLLAMA_INSTANCE_COUNT} running (ollama, ollama2, ...), internal only at"
+    OLLAMA_REPORT_COUNT="$(normalized_ollama_instance_count)"
+    if [ "$OLLAMA_REPORT_COUNT" -gt 1 ]; then
+        echo -e "     ${GREEN}*${NC} ${WHITE}Ollama instances${NC}: ${OLLAMA_REPORT_COUNT} configured (ollama, ollama2, ...), internal only at"
         echo -e "       http://ollama<N>:11434, sharing one model store. Tune each with OLLAMA<N>_* in .env"
     fi
 fi

@@ -302,6 +302,9 @@ services:
       # Real client IPs behind Caddy. Without it the failed-auth rate limit is
       # shared by every client via Caddy's single container IP.
       TRUST_PROXY: "1"
+      # What the server advertises as its own address. ':+' prepends the scheme
+      # only when a hostname is set, so an unset N8N_MCP_HOSTNAME falls back to
+      # the whole localhost URL rather than to a bare "https://".
       BASE_URL: "${N8N_MCP_HOSTNAME:+https://}${N8N_MCP_HOSTNAME:-http://localhost:3000}"
       # Anonymous telemetry is ENABLED by default upstream.
       N8N_MCP_TELEMETRY_DISABLED: "${N8N_MCP_TELEMETRY_DISABLED:-true}"
@@ -376,13 +379,17 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      # NocoDB 2026.05.2+ rejects external data sources whose host resolves to a
-      # private range (SSRF protection), which covers every hostname on this
-      # Docker network - including "postgres". This narrow opt-in re-allows
-      # internal databases; webhooks and data import stay protected via
-      # NC_ALLOW_LOCAL_HOOKS / NC_ALLOW_LOCAL_DATA_IMPORT.
-      # NocoDB compares with === 'true', so the value must be exactly lowercase
-      # true; quoted here for consistency with the rest of this file.
+      # NocoDB rejects external data sources whose host resolves to a private
+      # range (SSRF protection, GHSA-w43h-r5m5-p832), which covers every
+      # hostname on this Docker network - including "postgres". The check first
+      # appears in helpers/validateDbConnectionHost.ts at tag 2026.05.2; the
+      # advisory metadata says 2026.05.1, and the two genuinely disagree.
+      # This opt-in is deliberately the narrow one: it re-allows internal
+      # databases only. Webhooks stay gated by NC_ALLOW_LOCAL_HOOKS, and on
+      # 2026.07.0+ data import by NC_ALLOW_LOCAL_DATA_IMPORT (before that
+      # release, import was gated by NC_ALLOW_LOCAL_HOOKS too). Never swap this
+      # for NC_DISABLE_SSRF_PROTECTION, which turns all of them off.
+      # Compared with === 'true', so it must be the lowercase string.
       NC_ALLOW_LOCAL_EXTERNAL_DBS: "true"
       NC_AUTH_JWT_SECRET: "${NOCODB_JWT_SECRET}"
       NC_DB: "pg://postgres:5432?u=postgres&p=${POSTGRES_PASSWORD}&d=nocodb"

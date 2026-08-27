@@ -9,12 +9,14 @@
 #   - Generates cryptographically secure random values (passwords, secrets, keys)
 #   - Creates bcrypt hashes for Caddy basic auth using `caddy hash-password`
 #   - Preserves existing user-provided values in .env on re-run
-#   - Supports --update flag to add new variables without regenerating existing
+#   - Adds variables that are new in .env.example without regenerating existing
+#     ones; the --update flag apply_update.sh passes is accepted but never
+#     parsed, so every run behaves the same way
 #   - Prompts for domain name and Let's Encrypt email
 #
 # Secret types: password (alphanum), secret (base64), hex, api_key, jwt
 #
-# Usage: bash scripts/03_generate_secrets.sh [--update]
+# Usage: bash scripts/03_generate_secrets.sh
 # =============================================================================
 
 set -e

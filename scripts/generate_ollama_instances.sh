@@ -5,11 +5,13 @@
 #
 # Instance 1 is the stock "ollama" container defined in docker-compose.yml and
 # is never touched here, so a default install (count 1) behaves exactly as
-# before. The output file is REMOVED rather than written empty: a stale file
-# would resurrect the old instance set after a downscale or point instances at
-# the wrong hardware profile after a switch.
+# before.
 #
-# This script is idempotent - the file is overwritten on each run.
+# Idempotent: each run either rewrites the output file from scratch or, when a
+# single instance is configured, REMOVES it. Removal rather than an empty file
+# is deliberate - Compose rejects a bare 'services:' key, and a stale file would
+# resurrect the old instance set after a downscale or point instances at the
+# wrong hardware profile after a switch.
 
 set -euo pipefail
 
@@ -18,7 +20,6 @@ source "$(dirname "$0")/utils.sh"
 init_paths
 
 OUTPUT_FILE="$PROJECT_ROOT/docker-compose.ollama-instances.yml"
-OLLAMA_MAX_INSTANCES=8
 
 # Load values from .env if not already set in the environment
 if [[ -f "$ENV_FILE" ]]; then
@@ -27,17 +28,6 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 OLLAMA_INSTANCE_COUNT="${OLLAMA_INSTANCE_COUNT:-1}"
 COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
-
-# Validate the count
-if ! [[ "$OLLAMA_INSTANCE_COUNT" =~ ^0*[1-9][0-9]*$ ]]; then
-    log_error "OLLAMA_INSTANCE_COUNT must be a positive integer, got: '$OLLAMA_INSTANCE_COUNT'"
-    exit 1
-fi
-OLLAMA_INSTANCE_COUNT=$((10#$OLLAMA_INSTANCE_COUNT))
-if (( OLLAMA_INSTANCE_COUNT > OLLAMA_MAX_INSTANCES )); then
-    log_warning "OLLAMA_INSTANCE_COUNT=$OLLAMA_INSTANCE_COUNT exceeds the supported maximum of $OLLAMA_MAX_INSTANCES; capping to $OLLAMA_MAX_INSTANCES."
-    OLLAMA_INSTANCE_COUNT=$OLLAMA_MAX_INSTANCES
-fi
 
 # Match the active Ollama hardware profile (mutually exclusive, set by the wizard)
 TEMPLATE="ollama-instance-template"
@@ -52,17 +42,37 @@ else
     HW_PROFILE=""
 fi
 
-# Nothing to generate: Ollama not deployed, or a single instance (the default).
-# Removing the file is required - a stale one would resurrect instances after a
-# downscale, or point them at the wrong hardware profile after a switch.
-if [[ -z "$HW_PROFILE" ]] || (( OLLAMA_INSTANCE_COUNT <= 1 )); then
+remove_output_and_exit() {
     if [[ -f "$OUTPUT_FILE" ]]; then
-        log_info "Removing $OUTPUT_FILE (single Ollama instance)"
+        log_info "Removing $OUTPUT_FILE ($1)"
         rm -f "$OUTPUT_FILE"
     fi
     cleanup_stale_ollama_instances 1 "$OLLAMA_MAX_INSTANCES"
     exit 0
+}
+
+# Ollama is not deployed at all. Check this BEFORE validating the count:
+# 05_configure_services.sh calls this script unconditionally under 'set -e', so
+# rejecting a leftover OLLAMA_INSTANCE_COUNT here would abort an entire
+# 'make update' over a value that has no effect on the stack being built.
+[[ -z "$HW_PROFILE" ]] && remove_output_and_exit "no Ollama profile active"
+
+# Validate the count. Warn and fall back rather than exit: aborting here kills
+# 'make update' after the wizard has already rewritten COMPOSE_PROFILES.
+if ! [[ "$OLLAMA_INSTANCE_COUNT" =~ ^0*[1-9][0-9]*$ ]]; then
+    log_warning "OLLAMA_INSTANCE_COUNT must be an integer between 1 and $OLLAMA_MAX_INSTANCES, got: '$OLLAMA_INSTANCE_COUNT'. Falling back to 1."
+    OLLAMA_INSTANCE_COUNT=1
 fi
+OLLAMA_INSTANCE_COUNT=$((10#$OLLAMA_INSTANCE_COUNT))
+if (( OLLAMA_INSTANCE_COUNT > OLLAMA_MAX_INSTANCES )); then
+    log_warning "OLLAMA_INSTANCE_COUNT=$OLLAMA_INSTANCE_COUNT exceeds the supported maximum of $OLLAMA_MAX_INSTANCES; capping to $OLLAMA_MAX_INSTANCES."
+    OLLAMA_INSTANCE_COUNT=$OLLAMA_MAX_INSTANCES
+fi
+
+# A single instance is the default: the stock "ollama" container is enough.
+# The 'cpu' profile is supported here as well as the GPU ones - the wizard only
+# offers the prompt for GPU hosts, but a hand-set count still works on CPU.
+(( OLLAMA_INSTANCE_COUNT <= 1 )) && remove_output_and_exit "single Ollama instance"
 
 log_info "Generating extra Ollama instances configuration..."
 log_info "OLLAMA_INSTANCE_COUNT=$OLLAMA_INSTANCE_COUNT (hardware profile: $HW_PROFILE)"

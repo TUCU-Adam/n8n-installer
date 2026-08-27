@@ -316,7 +316,11 @@ write_env_var() {
 # Usage: is_profile_active "n8n" && echo "n8n is active"
 is_profile_active() {
     local profile="$1"
-    [[ -n "$COMPOSE_PROFILES" && ",$COMPOSE_PROFILES," == *",$profile,"* ]]
+    # Strip spaces first: Docker Compose trims whitespace around profile names,
+    # so "n8n, open-webui" really does activate open-webui. Without this the
+    # stack runs a service that every profile check here reports as inactive.
+    local profiles="${COMPOSE_PROFILES// /}"
+    [[ -n "$profiles" && ",$profiles," == *",$profile,"* ]]
 }
 
 # Get n8n workers compose file path if profile is active and file exists
@@ -357,6 +361,37 @@ get_invokeai_gpu_devices_compose() {
 # Get the extra-Ollama-instances compose file path if it exists and an Ollama
 # hardware profile is active (requires COMPOSE_PROFILES to be set)
 # Usage: path=$(get_ollama_instances_compose) && COMPOSE_FILES+=("-f" "$path")
+# Highest instance number the Ollama generator will build. Single definition:
+# the generator, the wizard, the reports and doctor all clamp to it, and a
+# comment claiming four copies agree cannot keep them agreeing.
+OLLAMA_MAX_INSTANCES=8
+
+# Echo OLLAMA_INSTANCE_COUNT clamped to the range the generator actually builds.
+# Reports and the dashboard must not promise instances that were capped away:
+# the generator clamps in memory and never writes the capped value back, so a
+# hand-edited 99 stays 99 in .env while only 8 containers exist.
+# Usage: count=$(normalized_ollama_instance_count)
+normalized_ollama_instance_count() {
+    local count="${OLLAMA_INSTANCE_COUNT:-1}"
+    if ! [[ "$count" =~ ^0*[1-9][0-9]*$ ]]; then
+        echo 1
+        return 0
+    fi
+    count=$((10#$count))
+    (( count > OLLAMA_MAX_INSTANCES )) && count=$OLLAMA_MAX_INSTANCES
+    echo "$count"
+}
+
+# True when extra Ollama instances are configured but the generated compose file
+# is not there - i.e. the stack is about to start with one instance while .env
+# promises more. The 'git pull' + 'make restart' path never regenerates it.
+# Usage: ollama_instances_missing && log_warning "..."
+ollama_instances_missing() {
+    [ -f "$PROJECT_ROOT/docker-compose.ollama-instances.yml" ] && return 1
+    [ "${OLLAMA_INSTANCE_COUNT:-1}" -gt 1 ] 2>/dev/null || return 1
+    is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd" || is_profile_active "cpu"
+}
+
 get_ollama_instances_compose() {
     local compose_file="$PROJECT_ROOT/docker-compose.ollama-instances.yml"
     if [ -f "$compose_file" ] && \
@@ -416,6 +451,8 @@ build_compose_files_array() {
     fi
     if path=$(get_ollama_instances_compose); then
         COMPOSE_FILES+=("-f" "$path")
+    elif ollama_instances_missing; then
+        log_warning "OLLAMA_INSTANCE_COUNT=${OLLAMA_INSTANCE_COUNT} but docker-compose.ollama-instances.yml is missing - only one Ollama instance will start. Regenerate it with: bash scripts/generate_ollama_instances.sh"
     fi
     if path=$(get_ollama_gpu_devices_compose); then
         COMPOSE_FILES+=("-f" "$path")
@@ -774,7 +811,7 @@ cleanup_legacy_n8n_workers() {
 # Usage: cleanup_stale_ollama_instances <keep_count> <max_instances>
 cleanup_stale_ollama_instances() {
     local keep="${1:-1}"
-    local max="${2:-8}"
+    local max="${2:-$OLLAMA_MAX_INSTANCES}"
     local i container_name
     local removed=0
     local failed=0
@@ -790,7 +827,12 @@ cleanup_stale_ollama_instances() {
 
     for (( i = keep + 1; i <= max; i++ )); do
         container_name="ollama${i}"
-        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
+        # Scope the match to this stack. "ollama2" is the obvious name someone
+        # picks when hand-rolling a second Ollama before this feature existed,
+        # and this loop runs on every install/update - an unfiltered name match
+        # would 'docker rm -f' their container.
+        if docker ps -a --filter "label=com.docker.compose.project=localai" \
+               --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
             log_info "Removing stale Ollama instance container: $container_name"
             docker stop "$container_name" >/dev/null 2>&1 || true
             # Branch on the real result: 'removed' must count containers that
@@ -806,8 +848,10 @@ cleanup_stale_ollama_instances() {
         fi
     done
 
-    # Use if/fi, not '[ ... ] && log_success': the generator runs under 'set -e'
-    # and a failing &&-list as the final statement would abort it.
+    # if/fi rather than '[ ... ] && log_success': callers run under 'set -e',
+    # where a false &&-list reaching the end of a function makes it return 1.
+    # The explicit 'return 0' below covers that today; keep the shape anyway so
+    # adding a statement here cannot reintroduce it.
     if [ "$removed" -gt 0 ]; then
         log_success "Removed $removed stale Ollama instance container(s)"
     fi
@@ -877,6 +921,23 @@ cleanup_removed_hermes() {
 
 # Bind the Supabase API gateway to loopback by default (issue #108).
 #
+# Rewrite one legacy Kong port key, but only while it still holds the exact
+# insecure upstream default. The write is checked: write_env_var deletes the old
+# line before appending the new one, so an unchecked failure could leave the key
+# absent - reverting the gateway to upstream's 8000-on-all-interfaces default,
+# the very thing issue #108 is about. It would also abort the caller's 'set -e'
+# with a bare sed/echo error, so this reports and continues instead.
+# Usage: _retire_legacy_kong_key KEY INSECURE_DEFAULT HARDENED_VALUE [env_file]
+_retire_legacy_kong_key() {
+    local key="$1" insecure="$2" hardened="$3" file="${4:-$ENV_FILE}"
+
+    [ "$(read_env_var "$key" "$file")" = "$insecure" ] || return 0
+    if ! write_env_var "$key" "$hardened" "$file"; then
+        log_error "Could not rewrite $key in $file (permission denied?). Set $key=$hardened manually; until then the Supabase gateway falls back to $key if API_GW_HTTP_PORT is unset."
+    fi
+    return 0
+}
+
 # Supabase runs from its own cloned compose file, started with a single -f and
 # no --project-directory, so Compose's project directory is supabase/docker/
 # and the env file it interpolates from is supabase/docker/.env - NOT the root
@@ -888,7 +949,11 @@ cleanup_removed_hermes() {
 # (supabase/supabase#48153, after the Kong -> Envoy switch).
 #
 # Idempotent and re-run safe:
-#   - seeds API_GW_HTTP_PORT in the root .env only when the key is absent
+#   - seeds API_GW_HTTP_PORT in the root .env whenever it is absent or empty,
+#     carrying across whatever KONG_HTTP_PORT already says: a bare port becomes
+#     127.0.0.1:<port>, an explicit address is preserved verbatim. That covers
+#     the fresh install (the template ships 127.0.0.1:8000), the legacy upgrade
+#     (a bare 8000) and a deliberate opt-out (0.0.0.0:8000) with one rule.
 #   - force-syncs the root value into supabase/docker/.env on every run, so
 #     opting back in only requires editing the root .env
 #   - rewrites the legacy KONG_* keys only when still on the exact insecure
@@ -902,7 +967,7 @@ harden_supabase_gateway_bind() {
 
     local sb_env="$PROJECT_ROOT/supabase/docker/.env"
     local default_bind="127.0.0.1:8000"
-    local bind legacy legacy_kong gw_port
+    local bind legacy_kong gw_port
 
     # Seed the root .env when the key has never existed. This also covers the
     # 'git pull' + 'make restart' path, which never runs 03_generate_secrets.sh.
@@ -913,16 +978,19 @@ harden_supabase_gateway_bind() {
         # the user's own choice across instead of silently moving their gateway.
         legacy_kong=$(read_env_var "KONG_HTTP_PORT")
         if [[ "$legacy_kong" == *:* ]]; then
-            # Already an explicit address (e.g. 0.0.0.0:8000 or a LAN IP) - that
-            # is a deliberate choice, so leave the gateway exactly as configured.
-            log_info "KONG_HTTP_PORT is set to '$legacy_kong'; leaving the Supabase API gateway binding as configured."
-            return 0
+            # Already an explicit address: the template's own 127.0.0.1:8000 on
+            # a fresh install, or a deliberate 0.0.0.0/LAN opt-out. Carry it
+            # across verbatim - do NOT return early here, or the fresh install
+            # would never get API_GW_HTTP_PORT seeded or synced at all, leaving
+            # the bind to depend solely on upstream's legacy fallback.
+            default_bind="$legacy_kong"
+        else
+            gw_port="8000"
+            if [[ "$legacy_kong" =~ ^[0-9]+$ ]]; then
+                gw_port="$legacy_kong"
+            fi
+            default_bind="127.0.0.1:${gw_port}"
         fi
-        gw_port="8000"
-        if [[ "$legacy_kong" =~ ^[0-9]+$ ]]; then
-            gw_port="$legacy_kong"
-        fi
-        default_bind="127.0.0.1:${gw_port}"
 
         # Check the write: .env is often root-owned (see 08_fix_permissions.sh),
         # and an unchecked failure under the caller's 'set -e' would abort
@@ -935,18 +1003,16 @@ harden_supabase_gateway_bind() {
             return 0
         fi
         bind="$default_bind"
-        log_warning "Supabase API gateway is now bound to ${default_bind} instead of all interfaces (issue #108). To expose it again, set API_GW_HTTP_PORT in .env (e.g. API_GW_HTTP_PORT=8000)."
+        if [[ "$default_bind" == 127.0.0.1:* ]]; then
+            log_warning "Supabase API gateway is bound to ${default_bind}, not all interfaces (issue #108). To expose it, set API_GW_HTTP_PORT in .env (e.g. API_GW_HTTP_PORT=8000)."
+        else
+            log_info "Carried the existing gateway binding ${default_bind} into API_GW_HTTP_PORT; the Supabase API gateway stays reachable there."
+        fi
     fi
 
     # Retire the legacy Kong port keys, but only if the user never touched them
-    legacy=$(read_env_var "KONG_HTTP_PORT")
-    if [ "$legacy" = "8000" ]; then
-        write_env_var "KONG_HTTP_PORT" "127.0.0.1:8000"
-    fi
-    legacy=$(read_env_var "KONG_HTTPS_PORT")
-    if [ "$legacy" = "8443" ]; then
-        write_env_var "KONG_HTTPS_PORT" "127.0.0.1:8443"
-    fi
+    _retire_legacy_kong_key "KONG_HTTP_PORT" "8000" "127.0.0.1:8000"
+    _retire_legacy_kong_key "KONG_HTTPS_PORT" "8443" "127.0.0.1:8443"
 
     # Force-sync into the file Compose actually reads for the Supabase project
     if [ -f "$sb_env" ]; then
@@ -960,14 +1026,8 @@ harden_supabase_gateway_bind() {
                 return 0
             fi
         fi
-        legacy=$(read_env_var "KONG_HTTP_PORT" "$sb_env")
-        if [ "$legacy" = "8000" ]; then
-            write_env_var "KONG_HTTP_PORT" "127.0.0.1:8000" "$sb_env"
-        fi
-        legacy=$(read_env_var "KONG_HTTPS_PORT" "$sb_env")
-        if [ "$legacy" = "8443" ]; then
-            write_env_var "KONG_HTTPS_PORT" "127.0.0.1:8443" "$sb_env"
-        fi
+        _retire_legacy_kong_key "KONG_HTTP_PORT" "8000" "127.0.0.1:8000" "$sb_env"
+        _retire_legacy_kong_key "KONG_HTTPS_PORT" "8443" "127.0.0.1:8443" "$sb_env"
     fi
 }
 

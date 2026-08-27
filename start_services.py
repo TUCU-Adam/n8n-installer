@@ -31,7 +31,7 @@ def is_dify_enabled():
 def get_gpu_devices_compose_files():
     """Return GPU pinning override files for services with *_GPU_DEVICES set in .env."""
     env_values = dotenv_values(".env")
-    profiles = (env_values.get("COMPOSE_PROFILES") or "").split(',')
+    profiles = [p.strip() for p in (env_values.get("COMPOSE_PROFILES") or "").split(',')]
     files = []
     for var, profile, compose_file in [
         ("OLLAMA_GPU_DEVICES", "gpu-nvidia", "docker-compose.ollama-gpu-devices.yml"),
@@ -53,7 +53,10 @@ def get_open_webui_postgres_compose_files():
     which is what existing installations stay on (issue #105).
     """
     env_values = dotenv_values(".env")
-    profiles = (env_values.get("COMPOSE_PROFILES") or "").split(',')
+    # Compose trims whitespace around profile names, so "n8n, open-webui"
+    # really does start open-webui. Strip here or the guard below - and the
+    # error it prints - are both skipped while the service runs on SQLite.
+    profiles = [p.strip() for p in (env_values.get("COMPOSE_PROFILES") or "").split(',')]
     compose_file = "docker-compose.open-webui-postgres.yml"
     if env_values.get("OPEN_WEBUI_DATABASE") == "postgres" and "open-webui" in profiles:
         if os.path.exists(compose_file):
@@ -463,10 +466,22 @@ def start_local_ai():
     # variable, but it does require an Ollama hardware profile, to stay
     # equivalent to get_ollama_instances_compose() in scripts/utils.sh.
     ollama_instances_compose_path = "docker-compose.ollama-instances.yml"
-    active_profiles = (dotenv_values(".env").get("COMPOSE_PROFILES") or "").split(',')
-    if (os.path.exists(ollama_instances_compose_path)
-            and any(p in active_profiles for p in ("gpu-nvidia", "gpu-amd", "cpu"))):
-        compose_files.extend(["-f", ollama_instances_compose_path])
+    env_values = dotenv_values(".env")
+    active_profiles = [p.strip() for p in (env_values.get("COMPOSE_PROFILES") or "").split(',')]
+    if any(p in active_profiles for p in ("gpu-nvidia", "gpu-amd", "cpu")):
+        if os.path.exists(ollama_instances_compose_path):
+            compose_files.extend(["-f", ollama_instances_compose_path])
+        else:
+            try:
+                instance_count = int(env_values.get("OLLAMA_INSTANCE_COUNT") or 1)
+            except ValueError:
+                instance_count = 1
+            if instance_count > 1:
+                # Say so: .env promises N instances and exactly one will start.
+                print(f"WARNING: OLLAMA_INSTANCE_COUNT={instance_count} but "
+                      f"{ollama_instances_compose_path} is missing. Only one Ollama "
+                      f"instance will start. Regenerate it with: "
+                      f"bash scripts/generate_ollama_instances.sh")
 
     # Include GPU pinning overrides when *_GPU_DEVICES is set in .env
     for gpu_devices_compose_path in get_gpu_devices_compose_files():

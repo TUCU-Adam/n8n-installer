@@ -15,9 +15,10 @@
 # service starts. Open WebUI builds its own schema via Alembic on first boot,
 # so only the database itself has to pre-exist.
 #
-# Plain postgresql:// (not postgresql+psycopg://) is intentional: the image is
-# pinned to the rolling ':main' tag, and older snapshots ship only psycopg2,
-# where a '+psycopg' URL is a hard boot failure. Open WebUI normalises plain
+# Plain postgresql:// (not postgresql+psycopg://) is intentional: psycopg v3
+# only entered requirements.txt in v0.10.0, so a '+psycopg' URL is a hard boot
+# failure on any older image - and 'make restart' does not re-pull, so an old
+# local image can outlive several updates. Open WebUI normalises plain
 # postgresql:// to psycopg v3 for its async engine itself (see _make_async_url
 # in backend/open_webui/internal/db.py), so this works on every version.
 #
