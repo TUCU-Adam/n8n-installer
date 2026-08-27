@@ -9,12 +9,14 @@
 #   - Generates cryptographically secure random values (passwords, secrets, keys)
 #   - Creates bcrypt hashes for Caddy basic auth using `caddy hash-password`
 #   - Preserves existing user-provided values in .env on re-run
-#   - Supports --update flag to add new variables without regenerating existing
+#   - Adds variables that are new in .env.example without regenerating existing
+#     ones; the --update flag apply_update.sh passes is accepted but never
+#     parsed, so every run behaves the same way
 #   - Prompts for domain name and Let's Encrypt email
 #
 # Secret types: password (alphanum), secret (base64), hex, api_key, jwt
 #
-# Usage: bash scripts/03_generate_secrets.sh [--update]
+# Usage: bash scripts/03_generate_secrets.sh
 # =============================================================================
 
 set -e
@@ -102,6 +104,7 @@ declare -A VARS_TO_GENERATE=(
     ["LT_PASSWORD"]="password:32" # Added LibreTranslate basic auth password
     ["MINIO_ROOT_PASSWORD"]="password:32"
     ["N8N_ENCRYPTION_KEY"]="secret:64" # base64 encoded, 48 bytes -> 64 chars
+    ["N8N_MCP_AUTH_TOKEN"]="secret:48" # Bearer token for n8n-MCP (Caddy gate + service auth)
     ["N8N_RUNNERS_AUTH_TOKEN"]="secret:64" # Task runner auth token for n8n v2.0
     ["N8N_USER_MANAGEMENT_JWT_SECRET"]="secret:64" # base64 encoded, 48 bytes -> 64 chars
     ["NEO4J_AUTH_PASSWORD"]="password:32" # Added Neo4j password
@@ -324,6 +327,21 @@ for var in "${DB_MIGRATION_VARS[@]}"; do
         fi
     fi
 done
+
+# Open WebUI storage backend - new installations only (issue #105)
+# New installations: the stack's shared PostgreSQL, which handles concurrent
+#   writes and removes the "database is locked" failures SQLite produces.
+# Upgrades: keep SQLite. Open WebUI does not migrate data between backends, so
+#   flipping this on an existing install would present an empty UI while the
+#   old chats stayed in webui.db inside the open-webui volume. Opting in is a
+#   documented manual step - see the README.
+if [[ -z "${existing_env_vars[OPEN_WEBUI_DATABASE]}" ]]; then
+    if [[ ${#existing_env_vars[@]} -gt 0 ]]; then
+        generated_values["OPEN_WEBUI_DATABASE"]="sqlite"
+    else
+        generated_values["OPEN_WEBUI_DATABASE"]="postgres"
+    fi
+fi
 
 # Create a temporary file for processing
 TMP_ENV_FILE=$(mktemp)

@@ -55,6 +55,7 @@ base_services_data=(
     "lightrag" "LightRAG (Graph-based RAG with knowledge graphs)"
     "monitoring" "Monitoring Suite (Prometheus, Grafana, cAdvisor, Node-Exporter)"
     "n8n" "n8n, n8n-worker, n8n-import (Workflow Automation)"
+    "n8n-mcp" "n8n-MCP (MCP server: n8n node docs + workflow tools for AI IDEs)"
     "neo4j" "Neo4j (Graph Database)"
     "nocodb" "NocoDB (Open Source Airtable Alternative - Spreadsheet Database)"
     "ollama" "Ollama (Local LLM Runner - select hardware in next step)"

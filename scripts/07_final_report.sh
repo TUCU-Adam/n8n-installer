@@ -85,6 +85,17 @@ fi
 if is_profile_active "n8n"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}n8n${NC}: Complete first-run setup with your email"
 fi
+if is_profile_active "n8n-mcp"; then
+    if [ -z "${N8N_API_KEY:-}" ]; then
+        echo -e "     ${GREEN}*${NC} ${WHITE}n8n-MCP${NC}: running in documentation-only mode"
+        echo -e "       To enable workflow management: in n8n open Settings > n8n API,"
+        echo -e "       create an API key, set N8N_API_KEY in .env, then run 'make restart'"
+    else
+        echo -e "     ${GREEN}*${NC} ${WHITE}n8n-MCP${NC}: workflow-management tools enabled (N8N_API_KEY is set)"
+    fi
+    echo -e "       Connect your IDE (token is on the Welcome Page):"
+    echo -e "       ${CYAN}npx -y mcp-remote https://${N8N_MCP_HOSTNAME:-<N8N_MCP_HOSTNAME>}/mcp --header \"Authorization: Bearer <N8N_MCP_AUTH_TOKEN>\"${NC}"
+fi
 if is_profile_active "portainer"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Portainer${NC}: Create admin account on first login"
 fi
@@ -96,6 +107,33 @@ if is_profile_active "flowise"; then
 fi
 if is_profile_active "open-webui"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Open WebUI${NC}: Register your account"
+    if [ "${OPEN_WEBUI_DATABASE:-sqlite}" != "postgres" ]; then
+        echo -e "       ${WHITE}Storage${NC}: SQLite. PostgreSQL avoids 'database is locked' errors with"
+        echo -e "       several tabs/devices - see 'Open WebUI: SQLite or PostgreSQL' in the README"
+        echo -e "       (switching requires manual data migration)."
+    else
+        echo -e "       ${WHITE}Storage${NC}: PostgreSQL (database 'openwebui')"
+        # Verify that claim against the running stack, not against .env. Two
+        # separate things can be wrong, and each looks fine from the other side:
+        # the compose override can be missing (container silently on SQLite, so
+        # the app just looks empty), or the database can be absent (Open WebUI
+        # answers /health anyway and 500s on every request).
+        if ! docker inspect open-webui >/dev/null 2>&1; then
+            echo -e "       ${RED}WARNING${NC}: the open-webui container does not exist, so the storage"
+            echo -e "       backend could not be verified. Run 'make doctor' once it is up."
+        elif ! docker inspect open-webui --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+            | grep -q '^DATABASE_URL=postgresql://'; then
+            echo -e "       ${RED}WARNING${NC}: the running open-webui container has no PostgreSQL"
+            echo -e "       DATABASE_URL - it is on SQLite and will look EMPTY. Run 'make doctor'."
+        elif ! docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then
+            echo -e "       ${RED}WARNING${NC}: PostgreSQL is not reachable, so the 'openwebui' database"
+            echo -e "       could not be verified. Run 'make doctor'."
+        elif ! docker exec postgres psql -U postgres -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='openwebui'" 2>/dev/null | grep -q 1; then
+            echo -e "       ${RED}WARNING${NC}: the 'openwebui' database does not exist. Open WebUI will"
+            echo -e "       start but fail on every request. Re-run 'make update', then 'make doctor'."
+        fi
+    fi
 fi
 if is_profile_active "nocodb"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}NocoDB${NC}: Create your account on first login"
@@ -111,6 +149,11 @@ if is_profile_active "gost"; then
 fi
 if is_profile_active "cpu" || is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Ollama API${NC}: To expose externally, point DNS at ${OLLAMA_HOSTNAME:-<OLLAMA_HOSTNAME>} and send 'Authorization: Bearer <token>' (see Welcome Page)"
+    OLLAMA_REPORT_COUNT="$(normalized_ollama_instance_count)"
+    if [ "$OLLAMA_REPORT_COUNT" -gt 1 ]; then
+        echo -e "     ${GREEN}*${NC} ${WHITE}Ollama instances${NC}: ${OLLAMA_REPORT_COUNT} configured (ollama, ollama2, ...), internal only at"
+        echo -e "       http://ollama<N>:11434, sharing one model store. Tune each with OLLAMA<N>_* in .env"
+    fi
 fi
 if is_profile_active "crawl4ai"; then
     echo -e "     ${GREEN}*${NC} ${WHITE}Crawl4AI${NC}: Internal API at http://crawl4ai:11235 - requests must send 'Authorization: Bearer <token>' (token on Welcome Page)"

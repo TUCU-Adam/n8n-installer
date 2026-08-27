@@ -60,6 +60,8 @@ The installer also makes the following powerful open-source tools **available fo
 
 ✅ [**n8n**](https://n8n.io/) - A low-code platform with over 400 integrations and advanced AI components to automate workflows.
 
+✅ [**n8n-MCP**](https://github.com/czlonkowski/n8n-mcp) - A Model Context Protocol server that gives AI coding assistants (Claude Code, Cursor, Windsurf, VS Code Copilot) indexed access to every n8n node's documentation, property schemas and thousands of workflow templates - and, once you add an n8n API key, the ability to create and update workflows in your n8n instance straight from your IDE.
+
 ✅ [**ComfyUI**](https://github.com/comfyanonymous/ComfyUI) - A powerful, node-based UI for Stable Diffusion workflows. Build and run image-generation pipelines visually, with support for custom nodes and extensions.
 
 ✅ [**Crawl4ai**](https://github.com/unclecode/crawl4ai) - A flexible web crawler designed for AI, enabling you to extract data from websites for your projects.
@@ -90,7 +92,7 @@ The installer also makes the following powerful open-source tools **available fo
 
 ✅ [**NocoDB**](https://nocodb.com/) - An open source Airtable alternative that turns any database into a smart spreadsheet with a no-code interface for building collaborative apps.
 
-✅ [**Ollama**](https://ollama.com/) - Run Llama 3, Mistral, Gemma, and other large language models locally. Optionally expose its API externally through Caddy under `OLLAMA_HOSTNAME`, protected by a generated Bearer token.
+✅ [**Ollama**](https://ollama.com/) - Run Llama 3, Mistral, Gemma, and other large language models locally. Optionally expose its API externally through Caddy under `OLLAMA_HOSTNAME`, protected by a generated Bearer token. On multi-GPU hosts you can run several instances (`OLLAMA_INSTANCE_COUNT`) to dedicate a GPU per model.
 
 ✅ [**Open WebUI**](https://openwebui.com/) - A user-friendly, ChatGPT-like interface to interact privately with your AI models and n8n agents.
 
@@ -185,6 +187,7 @@ After successful installation, your services are up and running! Here's how to g
     The installation script provided a summary report with all access URLs and credentials. Please refer to that report. The main services will be available at the following addresses (replace `yourdomain.com` with your actual domain):
 
     - **n8n:** `n8n.yourdomain.com` (Log in with the email address you provided during installation and the initial password from the summary report. You may be prompted to change this password on first login.)
+    - **n8n-MCP:** `n8n-mcp.yourdomain.com` (MCP endpoint at `/mcp`. Every request must send `Authorization: Bearer <N8N_MCP_AUTH_TOKEN>` - the token is on the Welcome Page - so a browser visit returns 401 by design. Connect with `npx -y mcp-remote https://n8n-mcp.yourdomain.com/mcp --header "Authorization: Bearer <token>"`, or keep the token out of your shell history and process list with `--header-file <path>` pointing at a file containing `Authorization: Bearer <token>`. Starts in documentation-only mode; to also manage workflows, create an API key in n8n under Settings -> n8n API, set `N8N_API_KEY` in `.env` and run `make restart`. Note that outside n8n Enterprise an API key has full account access.)
     - **Appsmith:** `appsmith.yourdomain.com` (Low-code app builder)
     - **ComfyUI:** `comfyui.yourdomain.com` (Node-based Stable Diffusion UI)
     - **Databasus:** `databasus.yourdomain.com`
@@ -303,6 +306,80 @@ This script will:
 - **Custom Caddy entries** (e.g. reverse proxy for a service running outside this stack): drop a `site-*.conf` file into `caddy-addon/`. It is imported automatically by the main Caddyfile. See [caddy-addon/README.md](caddy-addon/README.md) for examples.
 - **Docker Compose overrides** (change any service property): create a `docker-compose.override.yml` in the project root. It is picked up automatically with the highest precedence.
 - **Settings**: values you set in `.env` are preserved by the updater (except `GOST_NO_PROXY`, which is regenerated so it always covers newly added services).
+
+### Ollama on multi-GPU hosts
+
+By default the stack runs a single Ollama container. On a machine with several GPUs you can run more, so a large model can stay resident on its own GPU instead of being swapped out whenever another model is used.
+
+Set `OLLAMA_INSTANCE_COUNT` in `.env` (1-8) and run `make update` (or `bash scripts/generate_ollama_instances.sh` followed by `make restart`). Instance 1 stays the familiar `ollama` container; extras are `ollama2`, `ollama3`, and so on.
+
+```env
+OLLAMA_INSTANCE_COUNT=3
+OLLAMA_GPU_DEVICES=0,1     # instance 1 -> GPUs 0 and 1
+OLLAMA2_GPU_DEVICES=2      # instance 2 -> GPU 2
+OLLAMA3_GPU_DEVICES=3      # instance 3 -> GPU 3
+
+OLLAMA2_KEEP_ALIVE=-1      # keep this instance's model resident forever
+OLLAMA3_MAX_LOADED_MODELS=1
+```
+
+The runtime tuning variables — `KEEP_ALIVE`, `NUM_PARALLEL`, `MAX_LOADED_MODELS`, `CONTEXT_LENGTH`, `KV_CACHE_TYPE`, `GPU_OVERHEAD`, `SCHED_SPREAD` — can be set per instance with an `OLLAMA<N>_` prefix, and an unset one falls back to the global value. These take effect on the next `make restart`, with no regeneration needed. (`OLLAMA_GPU_COUNT` has no per-instance form, and `OLLAMA<N>_GPU_DEVICES` does not fall back to the global `OLLAMA_GPU_DEVICES` — it defaults to GPU N-1.)
+
+Notes:
+
+- **On NVIDIA, set `OLLAMA_GPU_DEVICES` too.** Extra instances are pinned to explicit GPU IDs, but instance 1 falls back to a count-based reservation and may otherwise land on a GPU already assigned to `ollama2`. `make doctor` warns about this. On AMD, `OLLAMA_GPU_DEVICES` is ignored: extra instances are pinned with `HIP_VISIBLE_DEVICES`, while instance 1 still sees every GPU — pin it yourself in `docker-compose.override.yml` if that matters.
+- **All instances share one model store**, so each model is downloaded only once.
+- **Extra instances are internal only**, reachable at `http://ollama2:11434` from other containers — for example, add it as a second connection in Open WebUI. There are no published ports; if you need external access to a specific instance, add a `caddy-addon/site-*.conf` file.
+- Lowering the count stops and removes the surplus containers on the next `make update`.
+
+### Open WebUI: SQLite or PostgreSQL
+
+Open WebUI stores chats, users and settings in either SQLite (a single file in the `open-webui` volume) or the stack's shared PostgreSQL. SQLite allows only one writer at a time, so with several tabs or devices open you may see:
+
+```
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) database is locked
+```
+
+PostgreSQL handles concurrent writes and puts the data in the same backup as the rest of the stack. Which one you get is controlled by `OPEN_WEBUI_DATABASE` in `.env`:
+
+- **New installations** default to `postgres`.
+- **Existing installations** stay on `sqlite`, deliberately. **Open WebUI does not migrate data between databases** — switching would give you an empty Open WebUI while your chats, users and tags stayed in `webui.db`.
+
+To switch an existing installation:
+
+1. **Back up the volume first** (check the exact name with `docker volume ls | grep open-webui`):
+   ```bash
+   docker run --rm -v localai_open-webui:/data -v "$PWD":/backup alpine \
+     tar czf /backup/open-webui-backup.tar.gz -C /data .
+   ```
+2. Set `OPEN_WEBUI_DATABASE=postgres` in `.env`.
+3. Run `make update` (not just `make restart`) — the `openwebui` database is created by `make install`/`make update`, and pointing Open WebUI at a database that does not exist gives you a container that starts and then fails every request.
+4. Open WebUI comes up **empty**. If you want your old data, migrate it now, **before registering an account** — importing users into a schema that already has an admin can collide on the primary key or the unique email. Use a purpose-built tool: [open-webui-postgres-migration](https://github.com/taylorwilsdon/open-webui-postgres-migration) or [Open-WebUI-SQLite-migration](https://github.com/Digitalist-Open-Cloud/Open-WebUI-SQLite-migration). Prefer these over generic `pgloader`, which does not understand Open WebUI's JSON and blob columns.
+5. Log in with your migrated account. Only register a fresh admin if you deliberately want to start empty.
+
+To revert, set `OPEN_WEBUI_DATABASE=sqlite` and run `make restart` — the original SQLite file is left untouched.
+
+Note that uploaded files and the vector store live in the `open-webui` volume in **either** mode, so moving the database does not make Open WebUI stateless and does not put all of its data into your PostgreSQL backup.
+
+## Security Notes
+
+### Published host ports bypass the firewall
+
+The installer configures `ufw` with `default deny incoming`, but **that does not cover Docker.** Docker publishes container ports in the `nat` table, which is evaluated *before* the `INPUT` chain `ufw` uses — so any port a container publishes on `0.0.0.0` is reachable from the internet regardless of your firewall rules. See [Docker: packet filtering and firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
+
+By design this stack publishes almost nothing: every service is reached through Caddy on ports 80/443 only. To audit what is actually exposed on your server:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Ports}}'   # the reliable check
+ss -ltnp                                      # host listeners
+```
+
+Trust `docker ps` here: with `"userland-proxy": false` the listener is owned by `dockerd` rather than a `docker-proxy` process, so `ss` output is easy to misread even though the port is published.
+
+Anything showing `0.0.0.0:<port>->` is internet-reachable if your server has a public IP.
+
+- **Supabase API gateway** — bound to `127.0.0.1:8000` by default. Caddy still reaches it over the Docker network, and host-local tooling (`curl http://localhost:8000`) keeps working. To expose it deliberately, set `API_GW_HTTP_PORT` in `.env` (e.g. `API_GW_HTTP_PORT=8000` for all interfaces, or `API_GW_HTTP_PORT=192.168.1.10:8000` for one LAN address) and run `make restart`. `make doctor` warns if the gateway is bound to all interfaces.
+- **Supabase database and pooler** — Supabase's upstream compose still publishes `0.0.0.0:5432` and `0.0.0.0:6543` from its `supavisor` service (container `supabase-pooler`). **If you run the `supabase` profile on a public-IP server, restrict these at your cloud provider's firewall or security group**, which is enforced outside the host and therefore not bypassed by Docker. You can close the pooler port yourself by setting `POOLER_PROXY_PORT_TRANSACTION=127.0.0.1:6543` in **`supabase/docker/.env`** — that is the file Compose interpolates for the Supabase stack, and the variable is only used for the port mapping. Editing the root `.env` has no effect here: the installer copies it to `supabase/docker/.env` once and afterwards only appends keys that are *missing* there, and only `API_GW_HTTP_PORT`/`KONG_HTTP_PORT`/`KONG_HTTPS_PORT` are force-synced. Re-apply your edit after any upstream change that recreates that file. The `5432` mapping cannot be handled the same way: `POSTGRES_PORT` is reused as a bare numeric port throughout Supabase's own connection strings, so it cannot take an address prefix.
 
 ## Cleaning up Docker
 

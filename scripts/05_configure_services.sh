@@ -133,6 +133,47 @@ fi
 
 
 # ----------------------------------------------------------------
+# Prompt for number of Ollama instances (multi-GPU hosts)
+# ----------------------------------------------------------------
+if is_profile_active "gpu-nvidia" || is_profile_active "gpu-amd"; then
+    log_subheader "Ollama Instances"
+    EXISTING_OLLAMA_INSTANCE_COUNT="$(read_env_var OLLAMA_INSTANCE_COUNT)"
+    OLLAMA_INSTANCE_COUNT_CURRENT="${EXISTING_OLLAMA_INSTANCE_COUNT:-1}"
+    # Validate the value already in .env, not just new input. A hand-edited
+    # "two" or a stray trailing space would otherwise be written straight back
+    # and then abort the whole update in generate_ollama_instances.sh.
+    if ! [[ "$OLLAMA_INSTANCE_COUNT_CURRENT" =~ ^0*[1-9][0-9]*$ ]] \
+       || [ "$((10#$OLLAMA_INSTANCE_COUNT_CURRENT))" -gt "$OLLAMA_MAX_INSTANCES" ]; then
+        log_warning "OLLAMA_INSTANCE_COUNT in .env is '$OLLAMA_INSTANCE_COUNT_CURRENT', which is not an integer between 1 and $OLLAMA_MAX_INSTANCES. Falling back to 1."
+        OLLAMA_INSTANCE_COUNT_CURRENT=1
+    fi
+    require_whiptail
+    OLLAMA_INSTANCE_COUNT_INPUT_RAW=$(wt_input "Ollama Instances" \
+      "Number of Ollama containers (1-$OLLAMA_MAX_INSTANCES). Use 2 or more only on a multi-GPU host, to dedicate a GPU per model and avoid model swapping. Extra instances are internal only (http://ollama2:11434) and share one model store. Leave empty to keep the current value ($OLLAMA_INSTANCE_COUNT_CURRENT)." \
+      "") || true
+    if [[ -z "$OLLAMA_INSTANCE_COUNT_INPUT_RAW" ]]; then
+        OLLAMA_INSTANCE_COUNT="$OLLAMA_INSTANCE_COUNT_CURRENT"
+    elif [[ "$OLLAMA_INSTANCE_COUNT_INPUT_RAW" =~ ^0*[1-9][0-9]*$ ]] \
+         && [ "$((10#$OLLAMA_INSTANCE_COUNT_INPUT_RAW))" -le "$OLLAMA_MAX_INSTANCES" ]; then
+        OLLAMA_INSTANCE_COUNT="$((10#$OLLAMA_INSTANCE_COUNT_INPUT_RAW))"
+    else
+        log_warning "Invalid input '$OLLAMA_INSTANCE_COUNT_INPUT_RAW'. Enter an integer between 1 and $OLLAMA_MAX_INSTANCES. Keeping $OLLAMA_INSTANCE_COUNT_CURRENT."
+        OLLAMA_INSTANCE_COUNT="$OLLAMA_INSTANCE_COUNT_CURRENT"
+    fi
+    write_env_var "OLLAMA_INSTANCE_COUNT" "$OLLAMA_INSTANCE_COUNT"
+
+    if [ "$OLLAMA_INSTANCE_COUNT" -gt 1 ] && is_profile_active "gpu-nvidia" \
+       && [ -z "$(read_env_var OLLAMA_GPU_DEVICES)" ]; then
+        log_warning "Running $OLLAMA_INSTANCE_COUNT Ollama instances but OLLAMA_GPU_DEVICES is empty: the first instance is not GPU-pinned and may land on a GPU already assigned to ollama2. Set OLLAMA_GPU_DEVICES in .env (e.g. 0)."
+    fi
+fi
+
+# Always run, even when Ollama is not selected: this also removes a stale
+# generated file after a hardware-profile switch or after Ollama is deselected.
+bash "$SCRIPT_DIR/generate_ollama_instances.sh"
+
+
+# ----------------------------------------------------------------
 # Cloudflare Tunnel Token (if cloudflare-tunnel profile is active)
 # ----------------------------------------------------------------
 if is_profile_active "cloudflare-tunnel"; then

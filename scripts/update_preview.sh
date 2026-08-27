@@ -83,6 +83,11 @@ if is_profile_active "n8n"; then
     check_image_update "n8n-runner" "n8nio/runners:stable"
 fi
 
+if is_profile_active "n8n-mcp"; then
+    log_subheader "n8n-MCP"
+    check_image_update "n8n-mcp" "${N8N_MCP_IMAGE:-ghcr.io/czlonkowski/n8n-mcp:latest}"
+fi
+
 # Check monitoring if profile is active
 if is_profile_active "monitoring"; then
     log_subheader "Monitoring Services"

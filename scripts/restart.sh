@@ -8,8 +8,10 @@
 # Handles compose files via build_compose_files_array() from utils.sh:
 #   - docker-compose.yml (main)
 #   - docker-compose.n8n-workers.yml (if exists and n8n profile active)
+#   - docker-compose.ollama-instances.yml (if exists and an Ollama profile active)
 #   - docker-compose.ollama-gpu-devices.yml (if gpu-nvidia profile active and OLLAMA_GPU_DEVICES set)
 #   - docker-compose.invokeai-gpu-devices.yml (if invokeai-nvidia profile active and INVOKEAI_GPU_DEVICES set)
+#   - docker-compose.open-webui-postgres.yml (if open-webui profile active and OPEN_WEBUI_DATABASE=postgres)
 #   - supabase/docker/docker-compose.yml (if exists and supabase profile active)
 #   - dify/docker/docker-compose.yaml (if exists and dify profile active)
 #   - docker-compose.override.yml (if exists, user overrides with highest precedence)
@@ -28,7 +30,17 @@ cd "$PROJECT_ROOT"
 # Load environment to check active profiles
 load_env
 
+# Keep the Supabase API gateway bound to loopback (issue #108). restart.sh runs
+# neither 03_generate_secrets.sh nor prepare_supabase_env(), so the documented
+# 'git pull' + 'make restart' path needs this explicitly.
+harden_supabase_gateway_bind
+
 PROJECT_NAME="localai"
+
+# Set when a compose override that .env asks for is missing. Without this the
+# run ends on "Services restarted successfully!" and the earlier error scrolls
+# away - on a non-interactive run the tail is all anyone reads.
+DEGRADED=0
 
 # Time to wait for external services (Supabase, Dify) to initialize before starting main stack
 EXTERNAL_SERVICE_INIT_DELAY=10
@@ -95,11 +107,23 @@ MAIN_COMPOSE_FILES=("-f" "$PROJECT_ROOT/docker-compose.yml")
 if path=$(get_n8n_workers_compose); then
     MAIN_COMPOSE_FILES+=("-f" "$path")
 fi
+if path=$(get_ollama_instances_compose); then
+    MAIN_COMPOSE_FILES+=("-f" "$path")
+elif ollama_instances_missing; then
+    DEGRADED=1
+fi
 if path=$(get_ollama_gpu_devices_compose); then
     MAIN_COMPOSE_FILES+=("-f" "$path")
 fi
 if path=$(get_invokeai_gpu_devices_compose); then
     MAIN_COMPOSE_FILES+=("-f" "$path")
+fi
+if path=$(get_open_webui_postgres_compose); then
+    MAIN_COMPOSE_FILES+=("-f" "$path")
+elif is_profile_active "open-webui" && [ "${OPEN_WEBUI_DATABASE:-}" = "postgres" ]; then
+    # build_compose_files_array already logged the full explanation above; only
+    # record it here so the closing line cannot claim an unqualified success.
+    DEGRADED=1
 fi
 OVERRIDE_COMPOSE="$PROJECT_ROOT/docker-compose.override.yml"
 if [ -f "$OVERRIDE_COMPOSE" ]; then
@@ -110,4 +134,8 @@ fi
 log_info "Starting main services..."
 docker compose -p "$PROJECT_NAME" "${MAIN_COMPOSE_FILES[@]}" up -d
 
-log_success "Services restarted successfully!"
+if [ "$DEGRADED" -eq 0 ]; then
+    log_success "Services restarted successfully!"
+else
+    log_warning "Services restarted, but the stack is NOT what .env describes - see the errors above."
+fi

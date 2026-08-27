@@ -282,6 +282,58 @@ services:
       retries: 5
       start_period: 30s
 
+  n8n-mcp:
+    image: "${N8N_MCP_IMAGE:-ghcr.io/czlonkowski/n8n-mcp:latest}"
+    container_name: n8n-mcp
+    profiles: ["n8n-mcp"]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      <<: *proxy-env
+      # The image defaults MCP_MODE to "stdio"; "http" is required to serve HTTP.
+      # Do NOT set USE_FIXED_HTTP - upstream deprecated it and it breaks streaming.
+      MCP_MODE: http
+      NODE_ENV: production
+      PORT: "3000"
+      LOG_LEVEL: "${N8N_MCP_LOG_LEVEL:-info}"
+      # Mandatory: the entrypoint exits 1 in http mode without a token.
+      # Caddy gates on this same token, so one Bearer header satisfies both.
+      AUTH_TOKEN: "${N8N_MCP_AUTH_TOKEN}"
+      # Real client IPs behind Caddy. Without it the failed-auth rate limit is
+      # shared by every client via Caddy's single container IP.
+      TRUST_PROXY: "1"
+      # What the server advertises as its own address. ':+' prepends the scheme
+      # only when a hostname is set, so an unset N8N_MCP_HOSTNAME falls back to
+      # the whole localhost URL rather than to a bare "https://".
+      BASE_URL: "${N8N_MCP_HOSTNAME:+https://}${N8N_MCP_HOSTNAME:-http://localhost:3000}"
+      # Anonymous telemetry is ENABLED by default upstream.
+      N8N_MCP_TELEMETRY_DISABLED: "${N8N_MCP_TELEMETRY_DISABLED:-true}"
+      # Blank N8N_API_KEY = documentation-only mode (node docs, schemas,
+      # templates). Paste an n8n API key to unlock the workflow-management
+      # tools. An empty value fails upstream's validation and is treated as
+      # unconfigured, so the service still starts cleanly.
+      N8N_API_URL: "${N8N_API_URL:-http://n8n:5678}"
+      N8N_API_KEY: "${N8N_API_KEY:-}"
+      # n8n resolves to a private Docker IP, and n8n-MCP's own SSRF guard
+      # rejects private ranges in both "strict" (upstream default) and
+      # "moderate", which would fail every n8n API call. "permissive" still
+      # blocks cloud-metadata endpoints.
+      WEBHOOK_SECURITY_MODE: "${N8N_MCP_WEBHOOK_SECURITY_MODE:-permissive}"
+    # Deliberately no volume: the node database is baked into the image and
+    # re-seeded only when absent, so a named volume would mask the image copy
+    # and freeze the node catalogue after every image update. The only state
+    # here is a regenerable, read-mostly SQLite index.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= curl -fsS http://127.0.0.1:3000/health > /dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
   qdrant:
     image: qdrant/qdrant
     container_name: qdrant
@@ -327,6 +379,18 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
+      # NocoDB rejects external data sources whose host resolves to a private
+      # range (SSRF protection, GHSA-w43h-r5m5-p832), which covers every
+      # hostname on this Docker network - including "postgres". The check first
+      # appears in helpers/validateDbConnectionHost.ts at tag 2026.05.2; the
+      # advisory metadata says 2026.05.1, and the two genuinely disagree.
+      # This opt-in is deliberately the narrow one: it re-allows internal
+      # databases only. Webhooks stay gated by NC_ALLOW_LOCAL_HOOKS, and on
+      # 2026.07.0+ data import by NC_ALLOW_LOCAL_DATA_IMPORT (before that
+      # release, import was gated by NC_ALLOW_LOCAL_HOOKS too). Never swap this
+      # for NC_DISABLE_SSRF_PROTECTION, which turns all of them off.
+      # Compared with === 'true', so it must be the lowercase string.
+      NC_ALLOW_LOCAL_EXTERNAL_DBS: "true"
       NC_AUTH_JWT_SECRET: "${NOCODB_JWT_SECRET}"
       NC_DB: "pg://postgres:5432?u=postgres&p=${POSTGRES_PASSWORD}&d=nocodb"
       NC_PUBLIC_URL: "https://${NOCODB_HOSTNAME}"
@@ -384,6 +448,13 @@ services:
       LT_PASSWORD_HASH: "${LT_PASSWORD_HASH}"
       LT_USERNAME: "${LT_USERNAME}"
       N8N_HOSTNAME: "${N8N_HOSTNAME}"
+      N8N_MCP_AUTH_TOKEN: "${N8N_MCP_AUTH_TOKEN}"
+      # Defaulted, unlike the other hostnames: 'git pull' + 'make restart' does
+      # not add new .env variables, so an .env from before this service existed
+      # would expand to an empty Caddy site address, which is a Caddyfile PARSE
+      # error - Caddy would crash-loop and take HTTPS down for every service,
+      # not just this one. '.localhost' gets an internal cert, so no ACME noise.
+      N8N_MCP_HOSTNAME: "${N8N_MCP_HOSTNAME:-n8n-mcp.localhost}"
       NEO4J_HOSTNAME: "${NEO4J_HOSTNAME}"
       NOCODB_HOSTNAME: "${NOCODB_HOSTNAME}"
       OLLAMA_HOSTNAME: "${OLLAMA_HOSTNAME}"
@@ -643,6 +714,28 @@ services:
   ollama-gpu-amd:
     profiles: ["gpu-amd"]
     <<: *service-ollama
+    image: ollama/ollama:rocm
+    devices:
+      - "/dev/kfd"
+      - "/dev/dri"
+
+  # Templates for extra Ollama instances on multi-GPU hosts, used by
+  # docker-compose.ollama-instances.yml via 'extends'. The "ollama-template"
+  # profile is never activated directly.
+  #
+  # These deliberately carry NO 'deploy:' block. Compose APPENDS
+  # deploy.resources.reservations.devices across 'extends', so a count-based
+  # reservation here would leak an extra, arbitrary GPU into every instance
+  # that pins specific device IDs. Do not add one.
+  ollama-instance-template:
+    <<: *service-ollama
+    container_name: ollama-instance-template
+    profiles: ["ollama-template"]
+
+  ollama-instance-template-amd:
+    <<: *service-ollama
+    container_name: ollama-instance-template-amd
+    profiles: ["ollama-template"]
     image: ollama/ollama:rocm
     devices:
       - "/dev/kfd"
