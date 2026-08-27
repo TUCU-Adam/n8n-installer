@@ -327,6 +327,14 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
+      # NocoDB 2026.06.0+ rejects external data sources whose host resolves to a
+      # private range (SSRF protection), which covers every hostname on this
+      # Docker network - including "postgres". This narrow opt-in re-allows
+      # internal databases; webhooks and data import stay protected via
+      # NC_ALLOW_LOCAL_HOOKS / NC_ALLOW_LOCAL_DATA_IMPORT. Must be the quoted
+      # string "true" - NocoDB compares with === 'true', and an unquoted YAML
+      # true would reach the container as "True" and silently fail.
+      NC_ALLOW_LOCAL_EXTERNAL_DBS: "true"
       NC_AUTH_JWT_SECRET: "${NOCODB_JWT_SECRET}"
       NC_DB: "pg://postgres:5432?u=postgres&p=${POSTGRES_PASSWORD}&d=nocodb"
       NC_PUBLIC_URL: "https://${NOCODB_HOSTNAME}"
