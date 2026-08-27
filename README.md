@@ -304,6 +304,24 @@ This script will:
 - **Docker Compose overrides** (change any service property): create a `docker-compose.override.yml` in the project root. It is picked up automatically with the highest precedence.
 - **Settings**: values you set in `.env` are preserved by the updater (except `GOST_NO_PROXY`, which is regenerated so it always covers newly added services).
 
+## Security Notes
+
+### Published host ports bypass the firewall
+
+The installer configures `ufw` with `default deny incoming`, but **that does not cover Docker.** Docker publishes container ports in the `nat` table, which is evaluated *before* the `INPUT` chain `ufw` uses — so any port a container publishes on `0.0.0.0` is reachable from the internet regardless of your firewall rules. See [Docker: packet filtering and firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
+
+By design this stack publishes almost nothing: every service is reached through Caddy on ports 80/443 only. To audit what is actually exposed on your server:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Ports}}'
+ss -ltnp                  # what is really listening, and on which address
+```
+
+Anything showing `0.0.0.0:<port>->` is internet-reachable if your server has a public IP.
+
+- **Supabase API gateway** — bound to `127.0.0.1:8000` by default. Caddy still reaches it over the Docker network, and host-local tooling (`curl http://localhost:8000`) keeps working. To expose it deliberately, set `API_GW_HTTP_PORT` in `.env` (e.g. `API_GW_HTTP_PORT=8000` for all interfaces, or `API_GW_HTTP_PORT=192.168.1.10:8000` for one LAN address) and run `make restart`. `make doctor` warns if the gateway is bound to all interfaces.
+- **Supabase database and pooler** — Supabase's upstream compose still publishes `0.0.0.0:5432` (Postgres) and `0.0.0.0:6543` (the Supavisor pooler). **If you run the `supabase` profile on a public-IP server, restrict these at your cloud provider's firewall or security group**, which is enforced outside the host and therefore not bypassed by Docker. This is upstream behavior that cannot be fixed with a port variable, because `POSTGRES_PORT` is reused as a bare numeric port throughout Supabase's own connection strings.
+
 ## Cleaning up Docker
 
 If you need to free up disk space, you can run the Docker cleanup command. This removes all unused Docker containers, images, and volumes.

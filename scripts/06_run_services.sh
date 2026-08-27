@@ -61,6 +61,11 @@ if [ ! -x "$PROJECT_ROOT/start_services.py" ]; then
   chmod +x "$PROJECT_ROOT/start_services.py"
 fi
 
+# Keep the Supabase API gateway bound to loopback (issue #108). Must run before
+# start_services.py, which is what prepares supabase/docker/.env and starts the
+# Supabase stack. Covers both fresh install and 'make update'.
+harden_supabase_gateway_bind
+
 log_subheader "Starting Services"
 log_info "Launching services using start_services.py..."
 # Execute start_services.py

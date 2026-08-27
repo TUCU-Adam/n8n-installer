@@ -233,6 +233,24 @@ else
     count_warning "Caddy container is not running"
 fi
 
+# Check exposed host ports
+# Docker publishes ports in the nat table, BEFORE ufw's INPUT chain, so a
+# 0.0.0.0 bind is reachable from the internet even with 'ufw default deny
+# incoming'. Everything in this stack is meant to be reached through Caddy.
+log_subheader "Exposed Ports"
+
+if is_profile_active "supabase"; then
+    GW_PORTS=$(docker ps --filter 'name=^supabase-envoy$' --filter 'name=^supabase-kong$' \
+                         --format '{{.Ports}}' 2>/dev/null)
+    if [ -z "$GW_PORTS" ]; then
+        count_warning "Supabase API gateway container not found (expected supabase-envoy)"
+    elif echo "$GW_PORTS" | grep -Eq '(^|, )(0\.0\.0\.0|:::|\[::\]):'; then
+        count_warning "Supabase API gateway publishes on all interfaces ($GW_PORTS). Set API_GW_HTTP_PORT=127.0.0.1:8000 in .env and run 'make restart'."
+    else
+        count_ok "Supabase API gateway is not exposed on all interfaces"
+    fi
+fi
+
 # Check key services
 log_subheader "Key Services"
 

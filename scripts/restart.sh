@@ -28,6 +28,11 @@ cd "$PROJECT_ROOT"
 # Load environment to check active profiles
 load_env
 
+# Keep the Supabase API gateway bound to loopback (issue #108). restart.sh runs
+# neither 03_generate_secrets.sh nor prepare_supabase_env(), so the documented
+# 'git pull' + 'make restart' path needs this explicitly.
+harden_supabase_gateway_bind
+
 PROJECT_NAME="localai"
 
 # Time to wait for external services (Supabase, Dify) to initialize before starting main stack

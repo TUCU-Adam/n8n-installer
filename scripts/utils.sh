@@ -789,6 +789,72 @@ cleanup_removed_hermes() {
     fi
 }
 
+# Bind the Supabase API gateway to loopback by default (issue #108).
+#
+# Supabase runs from its own cloned compose file, started with a single -f and
+# no --project-directory, so Compose's project directory is supabase/docker/
+# and the env file it interpolates from is supabase/docker/.env - NOT the root
+# .env. prepare_supabase_env() only ever ADDS keys missing from that file, so
+# the root value has to be force-pushed for the gateway port to stay
+# authoritative.
+#
+# Upstream precedence is API_GW_HTTP_PORT -> KONG_HTTP_PORT -> 8000
+# (supabase/supabase#48153, after the Kong -> Envoy switch).
+#
+# Idempotent and re-run safe:
+#   - seeds API_GW_HTTP_PORT in the root .env only when the key is absent
+#   - force-syncs the root value into supabase/docker/.env on every run, so
+#     opting back in only requires editing the root .env
+#   - rewrites the legacy KONG_* keys only when still on the exact insecure
+#     default (8000 / 8443); any customized value is left alone
+#
+# Usage: harden_supabase_gateway_bind
+harden_supabase_gateway_bind() {
+    local profiles
+    profiles=$(read_env_var "COMPOSE_PROFILES")
+    [[ ",${profiles}," == *",supabase,"* ]] || return 0
+
+    local sb_env="$PROJECT_ROOT/supabase/docker/.env"
+    local default_bind="127.0.0.1:8000"
+    local bind legacy
+
+    # Seed the root .env when the key has never existed. This also covers the
+    # 'git pull' + 'make restart' path, which never runs 03_generate_secrets.sh.
+    bind=$(read_env_var "API_GW_HTTP_PORT")
+    if [ -z "$bind" ]; then
+        write_env_var "API_GW_HTTP_PORT" "$default_bind"
+        bind="$default_bind"
+        log_warning "Supabase API gateway is now bound to ${default_bind} instead of all interfaces (issue #108). To expose it again, set API_GW_HTTP_PORT in .env (e.g. API_GW_HTTP_PORT=8000)."
+    fi
+
+    # Retire the legacy Kong port keys, but only if the user never touched them
+    legacy=$(read_env_var "KONG_HTTP_PORT")
+    if [ "$legacy" = "8000" ]; then
+        write_env_var "KONG_HTTP_PORT" "127.0.0.1:8000"
+    fi
+    legacy=$(read_env_var "KONG_HTTPS_PORT")
+    if [ "$legacy" = "8443" ]; then
+        write_env_var "KONG_HTTPS_PORT" "127.0.0.1:8443"
+    fi
+
+    # Force-sync into the file Compose actually reads for the Supabase project
+    if [ -f "$sb_env" ]; then
+        if [ "$(read_env_var "API_GW_HTTP_PORT" "$sb_env")" != "$bind" ]; then
+            write_env_var "API_GW_HTTP_PORT" "$bind" "$sb_env"
+            log_info "Synced API_GW_HTTP_PORT=${bind} to supabase/docker/.env"
+        fi
+        legacy=$(read_env_var "KONG_HTTP_PORT" "$sb_env")
+        if [ "$legacy" = "8000" ]; then
+            write_env_var "KONG_HTTP_PORT" "127.0.0.1:8000" "$sb_env"
+        fi
+        legacy=$(read_env_var "KONG_HTTPS_PORT" "$sb_env")
+        if [ "$legacy" = "8443" ]; then
+            write_env_var "KONG_HTTPS_PORT" "127.0.0.1:8443" "$sb_env"
+        fi
+    fi
+}
+
+
 #=============================================================================
 # USER DETECTION
 #=============================================================================
