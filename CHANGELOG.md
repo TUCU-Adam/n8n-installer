@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-09-02
+
+### Fixed
+- **Monitoring** - Upgrading an existing installation to 1.10.0 left Grafana in a restart loop with `Datasource provisioning error: data source not found`. The Prometheus data source already existed with a random uid, and Grafana cannot change the uid of an existing data source when provisioning pins one. The provisioning file now deletes the data source by name before recreating it with the fixed uid `Prometheus`; dashboards and alert rules reference the uid, so nothing is lost. Fresh installations were not affected.
+
 ## [1.10.0] - 2026-09-02
 
 ### Added
