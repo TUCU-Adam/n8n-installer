@@ -124,13 +124,11 @@ if is_profile_active "n8n"; then
 
     # Persist N8N_WORKER_COUNT to .env
     write_env_var "N8N_WORKER_COUNT" "$N8N_WORKER_COUNT"
-
-    # Generate worker-runner pairs configuration
-    # Each worker gets its own dedicated task runner sidecar
-    log_info "Generating n8n worker-runner pairs configuration..."
-    bash "$SCRIPT_DIR/generate_n8n_workers.sh"
 fi
 
+# Generate the n8n worker-runner pairs and the Prometheus targets. Runs even when
+# n8n is not selected: the generator then removes the stale targets file
+bash "$SCRIPT_DIR/generate_n8n_workers.sh"
 
 # ----------------------------------------------------------------
 # Prompt for number of Ollama instances (multi-GPU hosts)

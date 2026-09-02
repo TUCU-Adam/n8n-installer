@@ -32,7 +32,7 @@ This is **Selfhost AI** (repository `selfhost-ai`, formerly `n8n-install`), a Do
 - `scripts/06_run_services.sh`: Starts Docker Compose stack
 - `scripts/07_final_report.sh`: Post-install credential summary
 - `scripts/08_fix_permissions.sh`: Fixes file ownership for non-root access
-- `scripts/generate_n8n_workers.sh`: Generates dynamic worker/runner compose file
+- `scripts/generate_n8n_workers.sh`: Generates dynamic worker/runner compose file and the Prometheus n8n targets file
 - `scripts/generate_ollama_instances.sh`: Generates extra Ollama instances compose file (multi-GPU)
 - `scripts/update.sh`: Update orchestrator (syncs with origin and updates images)
 - `scripts/update_preview.sh`: Preview available updates without applying (dry-run)
@@ -183,6 +183,15 @@ This project uses [Semantic Versioning](https://semver.org/). When updating `CHA
 - All instances share the `ollama_storage` volume, so models are downloaded once; only instance 1 has a model-pull job
 - No published ports and no Caddy block for extra instances - they are internal (`ollama2:11434`); `caddy-addon/site-*.conf` is the documented extension point
 - The generator is invoked unconditionally from `05_configure_services.sh`, which covers install and `make update`, and self-heals a stale file after a hardware-profile switch
+
+### Monitoring (Prometheus + Grafana)
+
+- n8n metrics are enabled in the `x-n8n` anchor: `N8N_METRICS` plus `N8N_METRICS_INCLUDE_MESSAGE_EVENT_BUS_METRICS` / `_WORKFLOW_ID_LABEL` / `_WORKFLOW_NAME_LABEL` / `_WORKFLOW_INFO`. They expose `n8n_workflow_{started,success,failed,cancelled}_total{workflow_id,workflow_name}` and the `n8n_workflow_info` / `n8n_active_workflow_info` id-to-name gauges (leader main only). The alerts and recording rules also use `n8n_workflow_execution_duration_seconds{status,mode,workflow_id}`, which is on by default (`N8N_METRICS_INCLUDE_WORKFLOW_EXECUTION_DURATION`); turning it off silently disables them. Setting `N8N_METRICS_PREFIX` would break every panel and alert
+- **In queue mode the workflow counters and the duration histogram are emitted by `n8n` main**, which finalises every top-level execution; workers only report sub-workflow executions, node events and their own process metrics. Panels and rules therefore aggregate across instances (`sum by (...)`) and must not filter on `$instance`
+- Scrape targets are not static: `generate_n8n_workers.sh` writes `prometheus/targets/n8n.json` (gitignored) with the `n8n:5678` main target and one `n8n-worker-N:5678` per worker, each group carrying its `job` label, and `prometheus.yml` reads it via `file_sd_configs`. The generator runs unconditionally from `05_configure_services.sh` and removes the file when the n8n profile is inactive, so a monitoring-only install has no n8n targets and no permanently-down alert. Metrics are served on the queue-health port (`QUEUE_HEALTH_CHECK_PORT`, default 5678; 5679 is the task broker)
+- `prometheus/rules/*.yml` holds recording rules keyed on `workflow_id` (`n8n:workflow_success:increase5m`, `n8n:workflow_last_success_timestamp_seconds`); names are joined at query time from `n8n_active_workflow_info`, so renames are followed. The whole `prometheus/` directory is bind-mounted read-only to `/etc/prometheus`
+- Grafana's datasource, dashboards and alert rules are file-provisioned from `grafana/provisioning/`; contact points and notification policies are not, and no SMTP is configured. The Prometheus datasource has the fixed `uid: Prometheus` that dashboards and alert rules reference - keep them in sync. Use `$__rate_interval`, never a fixed range window, in range queries
+- No Alertmanager: alert rules are Grafana-managed (`grafana/provisioning/alerting/n8n-workflows.yml`); a malformed file stops Grafana from starting. `make doctor` checks that Grafana/Prometheus run, that the targets file matches `N8N_WORKER_COUNT` and that Prometheus loaded the `n8n-workflows` rule group without errors
 
 ### Caddy Reverse Proxy
 
