@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-09-02
+
+### Added
+- **Monitoring** - The n8n Grafana dashboard now shows whether workflows actually run, not just whether the n8n process is healthy. n8n is started with `N8N_METRICS_INCLUDE_MESSAGE_EVENT_BUS_METRICS`, `N8N_METRICS_INCLUDE_WORKFLOW_ID_LABEL`, `N8N_METRICS_INCLUDE_WORKFLOW_NAME_LABEL` and `N8N_METRICS_INCLUDE_WORKFLOW_INFO`, which expose `n8n_workflow_started/success/failed/cancelled_total` counters labelled per workflow plus id-to-name gauges, and a new "Workflow Executions" section adds three panels: executions by outcome over time, executions per workflow, and time since each active workflow's last successful execution. The last one is backed by Prometheus recording rules in `prometheus/rules/n8n-workflows.yml` that remember the last non-manual success per workflow for 30 days and follow renames. Four Grafana-managed alert rules are provisioned from `grafana/provisioning/alerting/n8n-workflows.yml`: "n8n workflow failed" (a non-manual execution failed in the last 15 minutes - runs from the editor are excluded), "n8n workflow stalled" (an active workflow has had no success for 24 hours), "n8n workflow has no recorded success" (active for 24 hours without ever succeeding since monitoring started - catches workflows that were already broken at upgrade time) and "n8n metrics target down" (Prometheus cannot scrape n8n or a worker). The 24-hour thresholds are global and tunable in that file; provisioned rules are read-only in the UI. Alerts follow Grafana's default notification policy, whose built-in email contact point delivers nothing without SMTP - create a contact point and select it under Alerting > Notification policies. The Prometheus data source now has the fixed uid `Prometheus` that the dashboards and rules reference (#110).
+
+### Fixed
+- **Monitoring** - Prometheus never scraped the n8n workers: the `n8n-worker` job targeted a hostname that does not exist (containers are `n8n-worker-1`, `n8n-worker-2`, ...) on the task-broker port 5679 instead of the metrics port 5678. `scripts/generate_n8n_workers.sh` now writes `prometheus/targets/n8n.json` with the n8n main target and one target per worker, read by Prometheus via `file_sd_configs`, so the target list follows `N8N_WORKER_COUNT` automatically. The generator runs on every install and update and removes the file when n8n is deselected, so a monitoring-only install no longer carries a permanently-down `n8n:5678` target. `make doctor` reports a missing or outdated targets file and a failing recording rule (#110).
+- **Doctor** - `make doctor` could never report Grafana or Prometheus as down: the check was gated on a profile named after the container, but both belong to the `monitoring` profile. The check now takes the enabling profile explicitly.
+- **n8n** - `docker compose build` failed on `n8n/Dockerfile.runner` with `/bin/sh: pnpm: Permission denied` (exit code 126). The upstream `n8nio/runners:stable` image rebuilt on 2026-09-02 ships `pnpm.cjs` without the execute bit (pnpm 11.22.0), so the `pnpm add cheerio axios moment lodash` step could not start even as root. The Dockerfile now restores the bit on the symlink target before running pnpm; the fix is a no-op once upstream republishes a correct image (#111).
+
 ## [1.9.0] - 2026-08-27
 
 ### Added

@@ -311,11 +311,13 @@ log_subheader "Key Services"
 check_service() {
     local container="$1"
     local port="$2"
+    # Profile that enables the container, when it differs from the container name
+    local profile="${3:-$container}"
 
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
         count_ok "$container is running"
     else
-        if is_profile_active "$container" || [ "$container" == "postgres" ] || [ "$container" == "redis" ] || [ "$container" == "caddy" ]; then
+        if is_profile_active "$profile" || [ "$container" == "postgres" ] || [ "$container" == "redis" ] || [ "$container" == "caddy" ]; then
             count_error "$container is not running (but expected)"
         fi
     fi
@@ -356,8 +358,40 @@ done
 fi
 
 if is_profile_active "monitoring"; then
-    check_service "grafana" "3000"
-    check_service "prometheus" "9090"
+    check_service "grafana" "3000" "monitoring"
+    check_service "prometheus" "9090" "monitoring"
+fi
+
+# n8n metrics reach Prometheus only through the generated targets file. A missing
+# or outdated file is otherwise invisible: the job simply has no targets.
+if is_profile_active "monitoring" && is_profile_active "n8n"; then
+    N8N_TARGETS_FILE="$PROJECT_ROOT/prometheus/targets/n8n.json"
+    WORKER_COUNT="${N8N_WORKER_COUNT:-1}"
+    if ! [[ "$WORKER_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+        count_error "N8N_WORKER_COUNT='$WORKER_COUNT' in .env is not a positive integer - worker generation fails with this value."
+    elif [ ! -f "$N8N_TARGETS_FILE" ]; then
+        count_error "Prometheus n8n targets file is missing - n8n metrics are not collected. Run 'bash scripts/generate_n8n_workers.sh'."
+    else
+        TARGET_COUNT="$(grep -o 'n8n-worker-[0-9]*:5678' "$N8N_TARGETS_FILE" | wc -l | tr -d ' ')"
+        if [ "$TARGET_COUNT" -ne "$WORKER_COUNT" ]; then
+            count_warning "Prometheus n8n targets file lists $TARGET_COUNT worker(s) but N8N_WORKER_COUNT=$WORKER_COUNT. Run 'bash scripts/generate_n8n_workers.sh'."
+        else
+            count_ok "Prometheus n8n targets match N8N_WORKER_COUNT=$WORKER_COUNT"
+        fi
+    fi
+fi
+
+# A recording rule that fails to load stops Prometheus (visible); one that evaluates
+# with errors only shows in its /rules page while the dependent alerts stay silent.
+if is_profile_active "monitoring" && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^prometheus$"; then
+    RULES_JSON="$(docker exec prometheus wget -qO- http://localhost:9090/api/v1/rules 2>/dev/null || true)"
+    if ! echo "$RULES_JSON" | grep -q '"name":"n8n-workflows"'; then
+        count_error "Prometheus did not load the n8n-workflows rule group from prometheus/rules/. Check 'make logs s=prometheus'."
+    elif echo "$RULES_JSON" | grep -q '"health":"err"'; then
+        count_error "A Prometheus recording rule is failing - the n8n stalled alerts cannot work. See Status > Rules in Prometheus."
+    else
+        count_ok "Prometheus n8n-workflows recording rules are healthy"
+    fi
 fi
 
 # Summary

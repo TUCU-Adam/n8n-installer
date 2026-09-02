@@ -28,7 +28,7 @@
 - **AI Agents & RAG** — Flowise, Dify, LangChain, vector databases (Qdrant, Weaviate)
 - **One Command Install** — Interactive wizard, automatic secrets, zero manual configuration
 - **Auto HTTPS** — Caddy reverse proxy with automatic Let's Encrypt certificates
-- **Built-in Monitoring** — Grafana + Prometheus stack included
+- **Built-in Monitoring** — Grafana + Prometheus stack included, with an n8n dashboard that tracks workflow executions (outcomes, per-workflow volume, time since last success) and ready-made alert rules for failed or stalled workflows
 - **Production Ready** — Scalable workers, health checks, proper service dependencies
 - **Free & Open Source** — No vendor lock-in, Apache 2.0 license
 
@@ -239,6 +239,7 @@ After successful installation, your services are up and running! Here's how to g
 
 4.  **Check Monitoring (Optional):**
     - Visit Grafana (`grafana.yourdomain.com`) to see dashboards monitoring your system's performance (data sourced from Prometheus).
+    - The **n8n Monitoring** dashboard includes a *Workflow Executions* section, and four alert rules are pre-provisioned: *n8n workflow failed* (non-manual executions only, so testing in the editor does not page), *n8n workflow stalled* (an active workflow with no success for 24 hours), *n8n workflow has no recorded success* (active for 24 hours without ever succeeding since monitoring started) and *n8n metrics target down*. The 24-hour thresholds are global, so workflows that run less than daily will alert; tune them in `grafana/provisioning/alerting/n8n-workflows.yml`. Alerts follow Grafana's default notification policy, whose built-in email contact point delivers nothing without SMTP: create a contact point (Telegram, Slack, Email with `GF_SMTP_*`, ...) under **Alerting → Contact points** and select it in **Alerting → Notification policies**.
 	
 
 ## Secure Access with Cloudflare Tunnel (Optional)
